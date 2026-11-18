@@ -138,9 +138,10 @@ Agents: `AGENTS.md` and the `{{ cookiecutter.project_slug }}-dev` skill (`.claud
 Two layers:
 
 1. **Cloud Run IAM** admits the caller: the service accounts in `access.callers`
-   (`deploy/config/<stack>/config.yaml`) get `roles/run.invoker`. A caller (e.g. the
-   goserve gateway with `upstream_auth: google_id_token`) sends its Google ID token in
-   `X-Serverless-Authorization`, which Cloud Run checks and strips. With
+   (`deploy/config/<stack>/config.yaml`) get `roles/run.invoker`. A caller (an API
+   gateway, another service) sends its own Google ID token in
+   `X-Serverless-Authorization`, which Cloud Run checks and strips, and forwards the
+   user's `Authorization` header unchanged. With
    `access.public: true`, allUsers get the role instead and layer 2 is the only gate.
 2. **The app** verifies the end user's `Authorization: Bearer <JWT>` on every route under
    `{{ cookiecutter.base_path }}/v*` except `{{ cookiecutter.base_path }}/v*/public/...`; `/healthz` and `/readyz`
