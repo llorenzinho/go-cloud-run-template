@@ -4,10 +4,19 @@ package di
 
 import (
 	"context"
+{%- if cookiecutter.use_auth == 'y' %}
+	"fmt"
+{%- endif %}
 	"log/slog"
+{%- if cookiecutter.use_auth == 'y' %}
+	"os"
+{%- endif %}
 
 	"github.com/samber/do/v2"
 
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.module_path }}/internal/auth"
+{%- endif %}
 	"{{ cookiecutter.module_path }}/internal/config"
 	"{{ cookiecutter.module_path }}/internal/health"
 	ihttp "{{ cookiecutter.module_path }}/internal/http"
@@ -34,7 +43,7 @@ type AppContext struct {
 // Shutdown cancels the context.
 func (a *AppContext) Shutdown() { a.cancel() }
 
-// Infra provides the infrastructure: logger{% if cookiecutter.use_postgres == 'y' %}, database{% endif %}{% if cookiecutter.use_redis == 'y' %}, redis{% endif %} and readiness checks.
+// Infra provides the infrastructure: logger{% if cookiecutter.use_postgres == 'y' %}, database{% endif %}{% if cookiecutter.use_redis == 'y' %}, redis{% endif %}{% if cookiecutter.use_auth == 'y' %}, token authentication{% endif %} and readiness checks.
 var Infra = do.Package(
 	do.Lazy(provideAppContext),
 	do.Lazy(provideLogger),
@@ -43,6 +52,9 @@ var Infra = do.Package(
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
 	do.Lazy(provideRedis),
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	do.Lazy(provideAuth),
 {%- endif %}
 	do.Lazy(provideHealth),
 )
@@ -120,6 +132,55 @@ func provideRedis(i do.Injector) (*redis.Client, error) {
 }
 {%- endif %}
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+// provideAuth returns the token verifier, or the fixed dev principal when
+// auth.enabled is false (validated: env=dev only).
+func provideAuth(i do.Injector) (auth.Authenticator, error) {
+	cfg := do.MustInvoke[*config.Config](i).Auth
+	log := do.MustInvoke[*slog.Logger](i)
+	ctx := do.MustInvoke[*AppContext](i)
+	if !cfg.Enabled {
+		p := cfg.DevPrincipal
+		log.Warn("authentication disabled: every request is the dev principal", "subject", p.Subject, "roles", p.Roles)
+		return auth.Dev{Principal: auth.Principal{Subject: p.Subject, Email: p.Email, Roles: p.Roles, Issuer: "dev"}}, nil
+	}
+
+	opts := []auth.Option{
+		auth.WithIssuer(cfg.Issuer),
+		auth.WithAudiences(cfg.Audiences...),
+		auth.WithAlgorithms(cfg.Algorithms...),
+		auth.WithClockSkew(cfg.ClockSkew),
+		auth.WithRolesClaim(cfg.RolesClaim),
+		auth.WithTokenTypes(cfg.TokenTypes...),
+		auth.WithLogger(log),
+	}
+	switch cfg.Mode {
+	case config.AuthModeJWKS:
+		opts = append(opts,
+			auth.WithJWKS(cfg.JWKS.URL),
+			auth.WithJWKSFetchTimeout(cfg.JWKS.FetchTimeout),
+			auth.WithJWKSRefresh(cfg.JWKS.RefreshInterval),
+			auth.WithUnknownKIDInterval(cfg.JWKS.UnknownKIDInterval),
+		)
+	case config.AuthModeStatic:
+		pem := []byte(cfg.Static.PublicKey)
+		if len(pem) == 0 {
+			var err error
+			if pem, err = os.ReadFile(cfg.Static.PublicKeyFile); err != nil {
+				return nil, fmt.Errorf("auth.static.public_key_file: %w (local dev: task auth:keygen)", err)
+			}
+		}
+		key, err := auth.ParsePublicKeyPEM(pem)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, auth.WithPublicKey(key))
+	}
+	return auth.New(ctx, opts...)
+}
+{%- endif %}
+
 // provideHealth registers the readiness check of every dependency.
 func provideHealth(i do.Injector) (*health.Registry, error) {
 	cfg := do.MustInvoke[*config.Config](i)
@@ -137,6 +198,17 @@ func provideHealth(i do.Injector) (*health.Registry, error) {
 		return nil, err
 	}
 	opts = append(opts, health.WithChecker(rdb))
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	authn, err := do.Invoke[auth.Authenticator](i)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := authn.(*auth.Verifier); ok {
+		if c := v.ReadinessCheck(); c != nil {
+			opts = append(opts, health.WithChecker(c))
+		}
+	}
 {%- endif %}
 	return health.NewRegistry(opts...), nil
 }
@@ -170,6 +242,12 @@ func provideRouterAndServer(i do.Injector) (*ihttp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	authn, err := do.Invoke[auth.Authenticator](i)
+	if err != nil {
+		return nil, err
+	}
+{%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
 	// example:begin items
 	svc, err := do.Invoke[*service.ItemService](i)
@@ -185,6 +263,9 @@ func provideRouterAndServer(i do.Injector) (*ihttp.Server, error) {
 		RequestTimeout: cfg.HTTP.RequestTimeout,
 		Log:            log,
 		Health:         handler.NewHealth(registry),
+{%- if cookiecutter.use_auth == 'y' %}
+		Auth:           authn,
+{%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
 		Items:          handler.NewItems(svc), // example
 {%- endif %}

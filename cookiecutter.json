@@ -10,6 +10,7 @@
   "db_schema": "{{ cookiecutter.project_slug.replace('-', '_') }}",
   "include_examples": "y",
   "use_redis": "n",
+  "use_auth": "n",
   "gcp_project": "",
   "gcp_region": "europe-west1",
   "ar_repository": "",
@@ -27,6 +28,7 @@
     ".github/workflows/release-please.yml"
   ],
   "__examples": "{{ 'y' if cookiecutter.use_postgres == 'y' and cookiecutter.include_examples == 'y' else 'n' }}",
+  "__auth_examples": "{{ 'y' if cookiecutter.use_auth == 'y' and cookiecutter.use_postgres == 'y' and cookiecutter.include_examples == 'y' else 'n' }}",
   "__prompts__": {
     "project_name": "Service name (human readable)",
     "project_slug": "Slug (repo, binary, Cloud Run service name)",
@@ -38,6 +40,7 @@
     "db_schema": "Postgres schema of the service",
     "include_examples": "Include the deletable \"items\" example (y/n)",
     "use_redis": "Include Redis (y/n)",
+    "use_auth": "Verify Bearer JWTs on the API (JWKS or static public key: Firebase, ZITADEL...) (y/n)",
     "gcp_project": "GCP project of Artifact Registry and Cloud Run (required)",
     "gcp_region": "GCP region",
     "ar_repository": "Artifact Registry Docker repository (required)",

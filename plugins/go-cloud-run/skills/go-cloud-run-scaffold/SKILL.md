@@ -1,6 +1,6 @@
 ---
 name: go-cloud-run-scaffold
-description: Use when the user wants to create, scaffold or bootstrap a new Go service / microservice / API for Cloud Run, or mentions go-cloud-run-template. Generates the project with cookiecutter (gin, optional Postgres with pgx pool + sqlc + goose, optional Redis, viper, samber/do, mise, Taskfile, GitHub Actions, Pulumi deploy) and can create the GitHub repository, its variables and the Workload Identity provider.
+description: Use when the user wants to create, scaffold or bootstrap a new Go service / microservice / API for Cloud Run, or mentions go-cloud-run-template. Generates the project with cookiecutter (gin, optional Postgres with pgx pool + sqlc + goose, optional Redis, optional Bearer JWT auth (JWKS / static key: Firebase, ZITADEL), viper, samber/do, mise, Taskfile, GitHub Actions, Pulumi deploy) and can create the GitHub repository, its variables and the Workload Identity provider.
 ---
 
 # Scaffold a Go Cloud Run service
@@ -25,6 +25,7 @@ read it first and only ask for what is missing.
 | `db_schema` | [slug with `_`] schema holding the tables; fixed (written in the migrations). |
 | `include_examples` | [`y`] deletable `items` CRUD showing every layer; ignored without Postgres. |
 | `use_redis` | [`n`] `y` adds go-redis, a Redis compose service, readiness check and deploy secret. |
+| `use_auth` | [`n`] `y` verifies Bearer JWTs on `<base_path>/v*` except `/v*/public` (JWKS URL or static PEM key; Firebase, ZITADEL), `/v1/me`, `RequireRole`, dev tokens via `task auth:token`, deploy `app.auth` and optional public access. Ask which IdP the user plans to use and point them to the generated README table. |
 | `base_path` | [`/<slug>`] API under `<base_path>/v1`. |
 | `github_owner` | **required**: GitHub user or org of the new repository. |
 | `repo_visibility` | [`private`] or `public` |
@@ -64,7 +65,7 @@ Run from the directory that should contain the project (default: the current one
 
 ```sh
 cookiecutter --no-input "${GO_CLOUD_RUN_TEMPLATE:-gh:llorenzinho/go-cloud-run-template}" \
-  project_name="Orders" project_slug=orders use_postgres=y include_examples=y use_redis=n \
+  project_name="Orders" project_slug=orders use_postgres=y include_examples=y use_redis=n use_auth=n \
   description="Orders service" repo_visibility=private \
   github_owner=my-user gcp_project=my-project ar_repository=my-repo \
   wif_pool=github wif_service_account=ci@my-project.iam.gserviceaccount.com \

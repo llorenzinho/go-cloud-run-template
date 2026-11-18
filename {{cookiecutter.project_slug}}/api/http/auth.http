@@ -1,0 +1,8 @@
+# Auth checks (VS Code REST Client / JetBrains HTTP client).
+# @token: task auth:token SUB=alice ROLES=admin
+@base = http://localhost:8080
+@token =
+
+### Caller identity (401 without a valid token)
+GET {{ '{{' }}base{{ '}}' }}{{ cookiecutter.base_path }}/v1/me
+Authorization: Bearer {{ '{{' }}token{{ '}}' }}

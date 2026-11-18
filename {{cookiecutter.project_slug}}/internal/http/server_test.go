@@ -18,6 +18,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.module_path }}/internal/auth"
+	"{{ cookiecutter.module_path }}/internal/auth/authtest"
+{%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
 	"{{ cookiecutter.module_path }}/internal/domain"
 {%- endif %}
@@ -38,8 +42,36 @@ type checker struct {
 func (c checker) Name() string                  { return c.name }
 func (c checker) Check(context.Context) error { return c.err }
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+// issuer signs the test tokens; adminToken is sent by send.
+var (
+	issuer     = must(authtest.NewIssuer("RS256"))
+	adminToken = issuer.MustToken(authtest.Claims{Subject: "admin-user", Roles: []string{"admin"}})
+)
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 func newRouter(t *testing.T, checks ...health.Checker) http.Handler {
 	t.Helper()
+	v, err := issuer.Verifier(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(v.Shutdown)
+	return newRouterWith(t, v, checks...)
+}
+
+func newRouterWith(t *testing.T, a auth.Authenticator, checks ...health.Checker) http.Handler {
+	t.Helper()
+{%- else %}
+
+func newRouter(t *testing.T, checks ...health.Checker) http.Handler {
+	t.Helper()
+{%- endif %}
 	gin.SetMode(gin.TestMode)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	opts := make([]health.Option, 0, len(checks))
@@ -50,6 +82,9 @@ func newRouter(t *testing.T, checks ...health.Checker) http.Handler {
 		BasePath: "/api",
 		Log:      log,
 		Health:   handler.NewHealth(health.NewRegistry(opts...)),
+{%- if cookiecutter.use_auth == 'y' %}
+		Auth:     a,
+{%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
 		Items:    handler.NewItems(service.NewItemService(&memRepo{items: map[uuid.UUID]*domain.Item{}}, log)),
 {%- endif %}
@@ -57,6 +92,32 @@ func newRouter(t *testing.T, checks ...health.Checker) http.Handler {
 	require.NoError(t, err)
 	return r
 }
+
+{%- if cookiecutter.use_auth == 'y' %}
+
+// send calls h as an admin; sendAs with another token ("" = none).
+func send(t *testing.T, h http.Handler, method, path, body string) (int, map[string]any) {
+	t.Helper()
+	code, out, _ := sendAs(t, h, adminToken, method, path, body)
+	return code, out
+}
+
+func sendAs(t *testing.T, h http.Handler, token, method, path, body string) (int, map[string]any, http.Header) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var out map[string]any
+	if rec.Body.Len() > 0 {
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	}
+	return rec.Code, out, rec.Header()
+}
+{%- else %}
 
 func send(t *testing.T, h http.Handler, method, path, body string) (int, map[string]any) {
 	t.Helper()
@@ -70,6 +131,7 @@ func send(t *testing.T, h http.Handler, method, path, body string) (int, map[str
 	}
 	return rec.Code, out
 }
+{%- endif %}
 
 func TestHealthz(t *testing.T) {
 	code, body := send(t, newRouter(t, checker{name: "postgres", err: errors.New("down")}), http.MethodGet, "/healthz", "")

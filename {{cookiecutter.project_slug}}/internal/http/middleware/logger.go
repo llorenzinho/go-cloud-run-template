@@ -7,6 +7,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+{%- if cookiecutter.use_auth == 'y' %}
+
+	"{{ cookiecutter.module_path }}/internal/auth"
+{%- endif %}
 )
 
 // Logger logs one structured line per request. Requests to quietPaths (e.g.
@@ -41,6 +45,11 @@ func Logger(log *slog.Logger, quietPaths ...string) gin.HandlerFunc {
 			slog.String("client_ip", c.ClientIP()),
 			slog.String("request_id", GetRequestID(c)),
 		}
+{%- if cookiecutter.use_auth == 'y' %}
+		if p, ok := auth.FromContext(c.Request.Context()); ok {
+			attrs = append(attrs, slog.String("sub", p.Subject))
+		}
+{%- endif %}
 		if len(c.Errors) > 0 {
 			attrs = append(attrs, slog.String("error", c.Errors.String()))
 		}

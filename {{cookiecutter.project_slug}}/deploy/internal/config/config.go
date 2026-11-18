@@ -67,8 +67,13 @@ func (i ImageConfig) Ref() string {
 	return i.Repository + ":" + i.Tag
 }
 
+{%- if cookiecutter.use_auth == 'y' %}
+// ServiceConfig configures the Cloud Run service. Invokers are the service
+// accounts in access.callers, plus allUsers with access.public.
+{%- else %}
 // ServiceConfig configures the Cloud Run service. It is never public: there is
 // no setting for it, invokers are the service accounts in access.callers.
+{%- endif %}
 type ServiceConfig struct {
 	// Name of the service; also prefix of the runtime service account
 	// (<name>-run, max 30 chars) and of the secrets.
@@ -102,7 +107,25 @@ type AppConfig struct {
 {%- if cookiecutter.use_redis == 'y' %}
 	RedisPoolSize int `mapstructure:"redis_pool_size" validate:"gte=0"`
 {%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	Auth AuthConfig `mapstructure:"auth"`
+{%- endif %}
 }
+{%- if cookiecutter.use_auth == 'y' %}
+
+// AuthConfig is the Bearer JWT verification of the API. In static mode the
+// public key is the secret auth_public_key (Secret Manager <service>-auth-public-key).
+type AuthConfig struct {
+	Mode       string   `mapstructure:"mode" validate:"oneof=jwks static"`
+	Issuer     string   `mapstructure:"issuer" validate:"required"`
+	Audiences  []string `mapstructure:"audiences" validate:"min=1,dive,required"`
+	Algorithms []string `mapstructure:"algorithms" validate:"min=1,dive,oneof=RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA"`
+	// JWKSURL is required with mode jwks.
+	JWKSURL    string   `mapstructure:"jwks_url" validate:"required_if=Mode jwks,omitempty,url"`
+	RolesClaim string   `mapstructure:"roles_claim"`
+	TokenTypes []string `mapstructure:"token_types" validate:"dive,required"`
+}
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 
 // DBConfig is the database of the stack. The password is a secret (db_password).
@@ -134,12 +157,25 @@ type DBTimeoutConfig struct {
 }
 {%- endif %}
 
+{%- if cookiecutter.use_auth == 'y' %}
+// AccessConfig lists who may call the service.
+type AccessConfig struct {
+	// Callers are service accounts (gateway, other services): they get
+	// roles/run.invoker. Cloud Run authenticates every request against them.
+	// At least one unless Public.
+	Callers []string `mapstructure:"callers" validate:"unique,dive,serviceaccount"`
+	// Public grants roles/run.invoker to allUsers: anyone reaches the
+	// container and the Bearer JWT (app.auth) is the only gate.
+	Public bool `mapstructure:"public"`
+}
+{%- else %}
 // AccessConfig lists who may call the service.
 type AccessConfig struct {
 	// Callers are service accounts (gateway, other services): they get
 	// roles/run.invoker. Cloud Run authenticates every request against them.
 	Callers []string `mapstructure:"callers" validate:"min=1,unique,dive,serviceaccount"`
 }
+{%- endif %}
 
 // Secrets are the values read from secret.yaml / DEPLOY_SECRET_*.
 type Secrets struct {
@@ -148,6 +184,10 @@ type Secrets struct {
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
 	RedisURL string `mapstructure:"redis_url" validate:"required,redisurl"`
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	// AuthPublicKey is the PEM public key of app.auth mode static (required then).
+	AuthPublicKey string `mapstructure:"auth_public_key"`
 {%- endif %}
 }
 
@@ -180,6 +220,18 @@ var ManagedEnv = []string{
 	"{{ cookiecutter.env_prefix }}_REDIS_URL",
 	"{{ cookiecutter.env_prefix }}_REDIS_POOL_SIZE",
 {%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.env_prefix }}_AUTH_ENABLED",
+	"{{ cookiecutter.env_prefix }}_AUTH_MODE",
+	"{{ cookiecutter.env_prefix }}_AUTH_ISSUER",
+	"{{ cookiecutter.env_prefix }}_AUTH_AUDIENCES",
+	"{{ cookiecutter.env_prefix }}_AUTH_ALGORITHMS",
+	"{{ cookiecutter.env_prefix }}_AUTH_ROLES_CLAIM",
+	"{{ cookiecutter.env_prefix }}_AUTH_TOKEN_TYPES",
+	"{{ cookiecutter.env_prefix }}_AUTH_JWKS_URL",
+	"{{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY",
+	"{{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY_FILE",
+{%- endif %}
 }
 
 // DefaultDir is the configuration directory, relative to the Pulumi project.
@@ -195,6 +247,11 @@ func Load(dir, stack string) (*Config, *Secrets, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	if cfg.App.Auth.Mode == "static" && sec.AuthPublicKey == "" {
+		return nil, nil, errors.New("secrets: auth_public_key: is required with app.auth.mode static")
+	}
+{%- endif %}
 	return cfg, sec, nil
 }
 
@@ -248,7 +305,7 @@ func LoadSecrets(dir, stack string) (*Secrets, error) {
 	var sec Secrets
 	if err := v.UnmarshalExact(&sec); err != nil {
 		// mapstructure errors may quote values: report the keys only.
-		return nil, errors.New("decode secrets: invalid or unknown keys (expected: {% if cookiecutter.use_postgres == 'y' %}db_password{% endif %}{% if cookiecutter.use_postgres == 'y' and cookiecutter.use_redis == 'y' %}, {% endif %}{% if cookiecutter.use_redis == 'y' %}redis_url{% endif %})")
+		return nil, errors.New("decode secrets: invalid or unknown keys (expected: {{ ([] + (['db_password'] if cookiecutter.use_postgres == 'y' else []) + (['redis_url'] if cookiecutter.use_redis == 'y' else []) + (['auth_public_key'] if cookiecutter.use_auth == 'y' else [])) | join(', ') }})")
 	}
 	if err := check(&sec); err != nil {
 		return nil, fmt.Errorf("secrets: %w", err)
@@ -265,6 +322,11 @@ func (c *Config) Warnings() []string {
 	if c.App.RequestTimeout == 0 || c.App.RequestTimeout >= c.Service.Timeout {
 		w = append(w, fmt.Sprintf("app.request_timeout (%s) should be below service.timeout (%s): Cloud Run cuts the request first", c.App.RequestTimeout, c.Service.Timeout))
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	if c.Access.Public {
+		w = append(w, "access.public is true: anyone can reach the service, the Bearer JWT (app.auth) is the only gate")
+	}
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 	if c.App.DB.SSLMode == "disable" {
 		w = append(w, "app.db.sslmode is disable: the connection to the database is not encrypted")
@@ -348,6 +410,9 @@ var validate = sync.OnceValue(func() *validator.Validate {
 		return strings.HasPrefix(s, "redis://") || strings.HasPrefix(s, "rediss://")
 	}))
 	v.RegisterStructValidation(validateService, ServiceConfig{})
+{%- if cookiecutter.use_auth == 'y' %}
+	v.RegisterStructValidation(validateAccess, AccessConfig{})
+{%- endif %}
 	return v
 })
 
@@ -375,6 +440,17 @@ func validateService(sl validator.StructLevel) {
 		}
 	}
 }
+
+{%- if cookiecutter.use_auth == 'y' %}
+
+// validateAccess requires a caller unless the service is public.
+func validateAccess(sl validator.StructLevel) {
+	a := sl.Current().Interface().(AccessConfig)
+	if !a.Public && len(a.Callers) == 0 {
+		sl.ReportError(a.Callers, "callers", "Callers", "min", "1")
+	}
+}
+{%- endif %}
 
 // memoryMiB parses "512Mi" / "1Gi"; 0 when invalid (reported by the memory tag).
 func memoryMiB(s string) int {
@@ -415,7 +491,7 @@ func fieldPath(ns string) string {
 
 func message(fe validator.FieldError) string {
 	switch fe.Tag() {
-	case "required":
+	case "required", "required_if":
 		return "is required"
 	case "oneof":
 		return "must be one of: " + fe.Param()
@@ -449,6 +525,8 @@ func message(fe validator.FieldError) string {
 		return "must be a redis:// or rediss:// URL"
 	case "cidr|ip":
 		return "must be an IP or CIDR"
+	case "url":
+		return "must be a URL"
 	default:
 		return "failed rule " + fe.Tag()
 	}

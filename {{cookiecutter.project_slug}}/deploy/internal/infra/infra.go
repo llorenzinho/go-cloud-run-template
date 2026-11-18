@@ -76,6 +76,12 @@ func Deploy(ctx *pulumi.Context, cfg *config.Config, sec *config.Secrets) error 
 		{"redis-url", config.EnvPrefixApp + "_REDIS_URL", sec.RedisURL},
 {%- endif %}
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	if cfg.App.Auth.Mode == "static" {
+		// Not confidential, but versioned and rotated like the other secrets.
+		values = append(values, struct{ name, env, value string }{"auth-public-key", config.EnvPrefixApp + "_AUTH_STATIC_PUBLIC_KEY", sec.AuthPublicKey})
+	}
+{%- endif %}
 	secrets := make([]secretEnv, 0, len(values))
 	deps := make([]pulumi.Resource, 0, len(values))
 	for _, v := range values {
@@ -177,8 +183,14 @@ func service(ctx *pulumi.Context, cfg *config.Config, sa *serviceaccount.Account
 		Location:           pulumi.String(cfg.Region),
 		Ingress:            pulumi.String(ingress[s.Ingress]),
 		DeletionProtection: pulumi.Bool(s.DeletionProtection),
+{%- if cookiecutter.use_auth == 'y' %}
+		// Cloud Run checks the caller's Google ID token and roles/run.invoker
+		// (allUsers with access.public) before the request reaches the
+		// container; the app then verifies the end-user Bearer JWT.
+{%- else %}
 		// IAM is the only authentication: Cloud Run checks the caller's Google
 		// ID token and roles/run.invoker before the request reaches the container.
+{%- endif %}
 		InvokerIamDisabled: pulumi.Bool(false),
 		Template: &cloudrunv2.ServiceTemplateArgs{
 			ServiceAccount:                sa.Email,
@@ -246,12 +258,45 @@ func ServerEnv(cfg *config.Config) map[string]string {
 	if len(a.TrustedProxies) > 0 {
 		env[p+"_HTTP_TRUSTED_PROXIES"] = strings.Join(a.TrustedProxies, ",")
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	maps.Copy(env, authEnv(a.Auth))
+{%- endif %}
 	maps.Copy(env, cfg.Service.Env) // validated: no managed keys
 	return env
 }
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+// authEnv returns the auth.* env vars of the server. Verification is always
+// on in a deploy (auth.enabled=false is refused outside env=dev anyway).
+func authEnv(a config.AuthConfig) map[string]string {
+	p := config.EnvPrefixApp
+	env := map[string]string{
+		p + "_AUTH_ENABLED":     "true",
+		p + "_AUTH_MODE":        a.Mode,
+		p + "_AUTH_ISSUER":      a.Issuer,
+		p + "_AUTH_AUDIENCES":   strings.Join(a.Audiences, ","),
+		p + "_AUTH_ALGORITHMS":  strings.Join(a.Algorithms, ","),
+		p + "_AUTH_ROLES_CLAIM": a.RolesClaim,
+		p + "_AUTH_JWKS_URL":    a.JWKSURL,
+		// The image's config.yaml points to the local dev key: never use it.
+		p + "_AUTH_STATIC_PUBLIC_KEY_FILE": "",
+	}
+	if len(a.TokenTypes) > 0 {
+		env[p+"_AUTH_TOKEN_TYPES"] = strings.Join(a.TokenTypes, ",")
+	}
+	return env
+}
+{%- endif %}
+
+{%- if cookiecutter.use_auth == 'y' %}
+
+// invokers lets the callers invoke the service, and everyone with access.public.
+{%- else %}
+
 // invokers lets the callers (and only them) invoke the service. There is no
 // public binding: allUsers / allAuthenticatedUsers are rejected by the config.
+{%- endif %}
 func invokers(ctx *pulumi.Context, cfg *config.Config, svc *cloudrunv2.Service, opts []pulumi.ResourceOption) error {
 	for _, email := range cfg.Access.Callers {
 		_, err := cloudrunv2.NewServiceIamMember(ctx, "invoker-"+email, &cloudrunv2.ServiceIamMemberArgs{
@@ -264,5 +309,18 @@ func invokers(ctx *pulumi.Context, cfg *config.Config, svc *cloudrunv2.Service, 
 			return fmt.Errorf("invoker %s: %w", email, err)
 		}
 	}
+{%- if cookiecutter.use_auth == 'y' %}
+	if cfg.Access.Public {
+		_, err := cloudrunv2.NewServiceIamMember(ctx, "invoker-public", &cloudrunv2.ServiceIamMemberArgs{
+			Name:     svc.Name,
+			Location: svc.Location,
+			Role:     pulumi.String("roles/run.invoker"),
+			Member:   pulumi.String("allUsers"),
+		}, opts...)
+		if err != nil {
+			return fmt.Errorf("public invoker: %w", err)
+		}
+	}
+{%- endif %}
 	return nil
 }

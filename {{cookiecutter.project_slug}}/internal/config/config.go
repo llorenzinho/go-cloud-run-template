@@ -4,6 +4,9 @@ package config
 
 import (
 	"cmp"
+{%- if cookiecutter.use_auth == 'y' %}
+	"errors"
+{%- endif %}
 	"fmt"
 	"os"
 	"reflect"
@@ -33,6 +36,9 @@ type Config struct {
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
 	Redis RedisConfig `mapstructure:"redis"`
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	Auth AuthConfig `mapstructure:"auth"`
 {%- endif %}
 }
 
@@ -112,6 +118,64 @@ type RedisConfig struct {
 }
 {%- endif %}
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+// Auth modes.
+const (
+	AuthModeJWKS   = "jwks"
+	AuthModeStatic = "static"
+)
+
+// AuthConfig configures the verification of Bearer JWTs on the API
+// (<base_path>/v*/..., except <base_path>/v*/public/...).
+type AuthConfig struct {
+	// Enabled=false skips verification and logs every request in as
+	// DevPrincipal. Refused outside env=dev.
+	Enabled bool `mapstructure:"enabled"`
+	// Mode selects the key source: jwks (Jwks.URL) or static (Static PEM).
+	Mode string `mapstructure:"mode" validate:"oneof=jwks static"`
+	// Issuer must equal the `iss` claim.
+	Issuer string `mapstructure:"issuer"`
+	// Audiences: `aud` must contain one of them.
+	Audiences []string `mapstructure:"audiences" validate:"dive,required"`
+	// Algorithms is the allowlist of JWS algorithms (asymmetric only).
+	Algorithms []string `mapstructure:"algorithms" validate:"min=1,dive,oneof=RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA"`
+	// ClockSkew is the tolerance on exp/nbf/iat.
+	ClockSkew time.Duration `mapstructure:"clock_skew" validate:"gte=0,lte=5m"`
+	// RolesClaim is the dotted path of the roles (array or object keys). Empty = no roles.
+	RolesClaim string `mapstructure:"roles_claim"`
+	// TokenTypes restricts the `typ` header (e.g. at+jwt). Empty = not checked.
+	TokenTypes   []string           `mapstructure:"token_types"`
+	JWKS         AuthJWKSConfig     `mapstructure:"jwks"`
+	Static       AuthStaticConfig   `mapstructure:"static"`
+	DevPrincipal AuthPrincipalConfig `mapstructure:"dev_principal"`
+}
+
+// AuthJWKSConfig is the key source of jwks mode.
+type AuthJWKSConfig struct {
+	URL             string        `mapstructure:"url" validate:"omitempty,url"`
+	FetchTimeout    time.Duration `mapstructure:"fetch_timeout" validate:"gt=0"`
+	RefreshInterval time.Duration `mapstructure:"refresh_interval" validate:"gte=1m"`
+	// UnknownKIDInterval is the minimum interval between refreshes triggered by an unknown kid.
+	UnknownKIDInterval time.Duration `mapstructure:"unknown_kid_interval" validate:"gte=0"`
+}
+
+// AuthStaticConfig is the key source of static mode: a PEM public key
+// ("PUBLIC KEY", "RSA PUBLIC KEY" or "CERTIFICATE"). PublicKey wins over
+// PublicKeyFile.
+type AuthStaticConfig struct {
+	PublicKey     string `mapstructure:"public_key"`
+	PublicKeyFile string `mapstructure:"public_key_file"`
+}
+
+// AuthPrincipalConfig is the identity used when auth is disabled.
+type AuthPrincipalConfig struct {
+	Subject string   `mapstructure:"subject"`
+	Email   string   `mapstructure:"email"`
+	Roles   []string `mapstructure:"roles"`
+}
+{%- endif %}
+
 // DefaultPath is the configuration file used when neither Load's argument nor
 // {{ cookiecutter.env_prefix }}_CONFIG is set. It is relative to the working directory.
 const DefaultPath = "configs/config.yaml"
@@ -187,5 +251,46 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: db.schema: must be %q (the schema of db/migrations)", db.Schema)
 	}
 {%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	if err := c.Auth.validate(c.Env); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+{%- endif %}
 	return nil
 }
+{%- if cookiecutter.use_auth == 'y' %}
+
+// validate checks the rules that depend on the mode and on env.
+func (a *AuthConfig) validate(env string) error {
+	var errs []string
+	if !a.Enabled {
+		if env != "dev" {
+			errs = append(errs, "auth.enabled: can be false only with env=dev")
+		}
+		if a.DevPrincipal.Subject == "" {
+			errs = append(errs, "auth.dev_principal.subject: is required when auth is disabled")
+		}
+	} else {
+		if a.Issuer == "" {
+			errs = append(errs, "auth.issuer: is required")
+		}
+		if len(a.Audiences) == 0 {
+			errs = append(errs, "auth.audiences: must contain at least 1 items")
+		}
+		switch a.Mode {
+		case AuthModeJWKS:
+			if a.JWKS.URL == "" {
+				errs = append(errs, "auth.jwks.url: is required with mode jwks")
+			}
+		case AuthModeStatic:
+			if a.Static.PublicKey == "" && a.Static.PublicKeyFile == "" {
+				errs = append(errs, "auth.static: public_key or public_key_file is required with mode static")
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+{%- endif %}

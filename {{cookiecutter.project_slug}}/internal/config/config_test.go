@@ -27,6 +27,11 @@ func TestLoadCommittedConfig(t *testing.T) {
 	assert.EqualValues(t, 5, cfg.DB.Pool.MaxConns)
 	assert.True(t, cfg.DB.AutoMigrate)
 {%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+	assert.True(t, cfg.Auth.Enabled)
+	assert.Equal(t, config.AuthModeStatic, cfg.Auth.Mode)
+	assert.Equal(t, []string{"RS256"}, cfg.Auth.Algorithms)
+{%- endif %}
 }
 
 func TestEnvOverrides(t *testing.T) {
@@ -82,5 +87,49 @@ func TestSchemaIsFixed(t *testing.T) {
 	_, err := config.Load(committed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db.schema")
+}
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+
+func TestAuthEnvOverrides(t *testing.T) {
+	t.Setenv("{{ cookiecutter.env_prefix }}_AUTH_MODE", "jwks")
+	t.Setenv("{{ cookiecutter.env_prefix }}_AUTH_JWKS_URL", "https://idp.example.com/keys")
+	t.Setenv("{{ cookiecutter.env_prefix }}_AUTH_AUDIENCES", "a,b")
+	cfg, err := config.Load(committed)
+	require.NoError(t, err)
+	assert.Equal(t, "jwks", cfg.Auth.Mode)
+	assert.Equal(t, []string{"a", "b"}, cfg.Auth.Audiences)
+}
+
+func TestAuthValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"jwks without url", map[string]string{"AUTH_MODE": "jwks"}, "auth.jwks.url: is required"},
+		{"static without key", map[string]string{"AUTH_STATIC_PUBLIC_KEY_FILE": ""}, "auth.static: public_key or public_key_file"},
+		{"no issuer", map[string]string{"AUTH_ISSUER": ""}, "auth.issuer: is required"},
+		{"bad mode", map[string]string{"AUTH_MODE": "magic"}, "auth.mode"},
+		{"symmetric alg", map[string]string{"AUTH_ALGORITHMS": "HS256"}, "auth.algorithms"},
+		{"disabled outside dev", map[string]string{"AUTH_ENABLED": "false", "ENV": "prod"}, "auth.enabled: can be false only with env=dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv("{{ cookiecutter.env_prefix }}_"+k, v)
+			}
+			_, err := config.Load(committed)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+
+	t.Run("disabled in dev", func(t *testing.T) {
+		t.Setenv("{{ cookiecutter.env_prefix }}_AUTH_ENABLED", "false")
+		cfg, err := config.Load(committed)
+		require.NoError(t, err)
+		assert.Equal(t, "dev", cfg.Auth.DevPrincipal.Subject)
+	})
 }
 {%- endif %}

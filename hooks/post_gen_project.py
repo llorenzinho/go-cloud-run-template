@@ -1,6 +1,6 @@
 """Finishes the generated project.
 
-1. Removes the files of the options left out (Postgres, examples, Redis).
+1. Removes the files of the options left out (Postgres, examples, Redis, auth).
 2. Installs the tools pinned in mise.toml, resolves Go modules, generates sqlc
    code and formats everything.
 3. Creates the first commit on main.
@@ -29,6 +29,8 @@ VISIBILITY = "{{ cookiecutter.repo_visibility }}"
 USE_POSTGRES = "{{ cookiecutter.use_postgres }}" == "y"
 EXAMPLES = "{{ cookiecutter.__examples }}" == "y"
 USE_REDIS = "{{ cookiecutter.use_redis }}" == "y"
+USE_AUTH = "{{ cookiecutter.use_auth }}" == "y"
+AUTH_EXAMPLES = "{{ cookiecutter.__auth_examples }}" == "y"
 CREATE_REPO = "{{ cookiecutter.create_github_repo }}" == "y"
 SETUP_WIF = "{{ cookiecutter.setup_wif }}" == "y"
 GCP_PROJECT = "{{ cookiecutter.gcp_project }}"
@@ -65,6 +67,21 @@ EXAMPLE_PATHS = [
 
 REDIS_PATHS = [
     "internal/redis",
+]
+
+AUTH_PATHS = [
+    "internal/auth",
+    "internal/http/middleware/auth.go",
+    "internal/http/middleware/auth_test.go",
+    "internal/http/handler/me.go",
+    "internal/http/auth_test.go",
+    "cmd/devtoken",
+    "api/http/auth.http",
+]
+
+# The public route example (<base>/v1/public/ping) comes with the items example.
+AUTH_EXAMPLE_PATHS = [
+    "internal/http/handler/public.go",
 ]
 
 # Integration tests only exist when there is a dependency to start.
@@ -113,6 +130,13 @@ def prune() -> None:
             (ROOT / "db" / "seed" / ".gitkeep").touch()
     if not USE_REDIS:
         remove("Redis support (use_redis=n)", REDIS_PATHS)
+    if not USE_AUTH:
+        remove("JWT authentication (use_auth=n)", AUTH_PATHS)
+    if not AUTH_EXAMPLES:
+        remove("the public route example", AUTH_EXAMPLE_PATHS)
+    api = ROOT / "api" / "http"
+    if api.is_dir() and not any(api.glob("*.http")):
+        shutil.rmtree(ROOT / "api")
     if not USE_POSTGRES and not USE_REDIS:
         remove("integration tests (no dependency)", INTEGRATION_PATHS)
 
@@ -138,6 +162,9 @@ def toolchain() -> None:
         mise("go", "mod", "tidy", cwd=m)
     mise("golangci-lint", "fmt")
     mise("golangci-lint", "fmt", "--config", str(ROOT / ".golangci.yml"), cwd=ROOT / "deploy")
+    if USE_AUTH:
+        step("Generating the local dev key pair (.dev/auth, git-ignored)")
+        mise("go", "run", "./cmd/devtoken", "keygen")
 
 
 def git_init() -> None:
@@ -245,6 +272,9 @@ def next_steps() -> None:
 Next steps:
   cd {SLUG} && task setup                      # tools, git hooks, .env
   task compose:up && task run                  # local dependencies and the server
+""")
+    if USE_AUTH:
+        print("""  task auth:token SUB=alice ROLES=admin        # dev token signed with .dev/auth/private.pem
 """)
     if USE_POSTGRES:
         print("""  task db:seed                                 # migrate + example data in the local Postgres

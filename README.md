@@ -7,12 +7,13 @@ Cookiecutter template for Go services on Cloud Run, distilled from blobster and 
 | HTTP | gin, request id, JSON access logs, JSON error envelope, `/healthz` + `/readyz` |
 | Config | viper: `configs/config.yaml` + `<PREFIX>_<KEY>` env overrides, go-playground/validator |
 | Data | optional Postgres: pgx pool (functional options, query/connect timeouts, `InTx`), sqlc with the DBTX as argument, goose migrations embedded in the binary (advisory lock, dedicated schema); optional Redis (go-redis) |
+| Auth | optional Bearer JWT verification (golang-jwt + keyfunc): JWKS URL (Firebase, ZITADEL, any OIDC IdP) or static PEM public key, iss/aud/exp checks, roles claim, `RequireRole`, public `/v*/public` group, dev key pair + `task auth:token` |
 | Probes | `/healthz` liveness, `/readyz` list of dependency checks (`health.Checker` registry) |
 | Wiring | samber/do; constructors use functional options (`logger.New`, `postgres.New`, `redis.New`, `http.NewServer`) |
 | Logs | slog JSON with Cloud Logging keys (`severity`, `message`) |
 | Tooling | mise (pinned tools), Taskfile, golangci-lint v2, pre-commit (Conventional Commits) |
 | CI/CD | GitHub Actions: `ci` (lint, tests with testcontainers, docker build), release-please, `image` (Artifact Registry via WIF) |
-| Deploy | Pulumi Go program in `deploy/`: Cloud Run min 0 instances, IAM-only access (`roles/run.invoker` for listed service accounts), Secret Manager |
+| Deploy | Pulumi Go program in `deploy/`: Cloud Run min 0 instances, IAM access (`roles/run.invoker` for listed service accounts; allUsers only with auth and `access.public`), Secret Manager |
 | Agents | `AGENTS.md`, `CLAUDE.md` and a `<slug>-dev` skill for Claude Code (`.claude/skills`) and opencode (`.opencode/skills`) |
 
 ## Use
@@ -26,9 +27,10 @@ cookiecutter gh:llorenzinho/go-cloud-run-template      # or: cookiecutter /path/
 
 After rendering, `hooks/post_gen_project.py`:
 
-1. removes the code of the options left out (Postgres, the `items` example, Redis) and links
+1. removes the code of the options left out (Postgres, the `items` example, Redis, auth) and links
    the skill for opencode;
-2. `mise install`, `sqlc generate` (with Postgres), `go mod tidy` (server + deploy), `golangci-lint fmt`;
+2. `mise install`, `sqlc generate` (with Postgres), `go mod tidy` (server + deploy), `golangci-lint fmt`,
+   the dev key pair in `.dev/auth` (with auth);
 3. `git init` + first commit `feat: initial commit …` on `main`;
 4. `setup_wif=y`: creates the OIDC provider `github-<slug>` in `wif_pool`, restricted to
    `assertion.repository == '<owner>/<slug>'`, and grants `roles/iam.workloadIdentityUser`
@@ -76,6 +78,7 @@ export GO_CLOUD_RUN_TEMPLATE=$PWD    # scaffold from the checkout instead of Git
 | `db_schema` | slug with `_` | Postgres schema of the service (fixed: written in the migrations) |
 | `include_examples` | `y` | deletable `items` CRUD (migration, queries, seed, repository with `InTx`, service, handler, tests); only with Postgres |
 | `use_redis` | `n` | |
+| `use_auth` | `n` | Bearer JWT on `<base_path>/v*` (except `/v*/public`): `internal/auth`, gin middleware, `/v1/me`, `cmd/devtoken`, deploy `app.auth` + `access.public` |
 | `gcp_project`, `ar_repository` | required | project of Artifact Registry and Cloud Run, Docker repository |
 | `gcp_region` | `europe-west1` | |
 | `wif_pool`, `wif_service_account` | required | Workload Identity pool, service account impersonated by Actions |
@@ -101,12 +104,13 @@ Or pass them on the command line: `cookiecutter … gcp_project=my-project …`.
 ## Developing the template
 
 ```sh
-task bake V=yyn            # render use_postgres/include_examples/use_redis = y/y/n into .bake/demo-yyn
-task verify:one V=ynn      # bake one variant: build, lint, unit tests, docker build, sqlc check, deploy check
-task verify                # every variant in VARIANTS (yyn ynn nnn nny yyy)
+task bake V=yyny           # render use_postgres/include_examples/use_redis/use_auth = y/y/n/y into .bake/demo-yyny
+task verify:one V=ynnn     # bake one variant: build, lint, unit tests, docker build, sqlc check, deploy check
+task verify                # every variant in VARIANTS (yynn ynnn nnnn nnyn yyyy nnny)
 task verify:integration    # testcontainers integration tests of the baked variants
 ```
 
 `image.yml` and `release-please.yml` are copied without rendering; `ci.yml` and the
-Taskfile wrap their `${{ }}` / `{{.VAR}}` parts in `{% raw %}`. Derived flag:
-`cookiecutter.__examples` (examples and Postgres both enabled).
+Taskfile wrap their `${{ }}` / `{{.VAR}}` parts in `{% raw %}`. Derived flags:
+`cookiecutter.__examples` (examples and Postgres both enabled), `cookiecutter.__auth_examples`
+(examples and auth).

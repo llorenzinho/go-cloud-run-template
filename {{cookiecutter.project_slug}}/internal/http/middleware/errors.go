@@ -10,6 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.module_path }}/internal/auth"
+{%- endif %}
 	"{{ cookiecutter.module_path }}/internal/domain"
 )
 
@@ -55,6 +58,12 @@ func classify(err error) (status int, code, msg string) {
 	case errors.Is(err, domain.ErrInvalidInput):
 		// The code already says "invalid_input": keep only the details.
 		return http.StatusBadRequest, "invalid_input", strings.TrimPrefix(err.Error(), domain.ErrInvalidInput.Error()+": ")
+{%- if cookiecutter.use_auth == 'y' %}
+	case errors.Is(err, auth.ErrUnauthenticated):
+		return http.StatusUnauthorized, "unauthenticated", "authentication required"
+	case errors.Is(err, auth.ErrForbidden):
+		return http.StatusForbidden, "forbidden", "insufficient permissions"
+{%- endif %}
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "timeout", "request timed out"
 	case errors.As(err, &maxBytes):

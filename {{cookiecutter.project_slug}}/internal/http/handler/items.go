@@ -10,6 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"{{ cookiecutter.module_path }}/internal/domain"
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.module_path }}/internal/http/middleware"
+{%- endif %}
 	"{{ cookiecutter.module_path }}/internal/service"
 )
 
@@ -23,6 +26,22 @@ func NewItems(svc *service.ItemService) *Items {
 	return &Items{svc: svc}
 }
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+// RoleAdmin may create, change and delete items; any authenticated caller may read them.
+const RoleAdmin = "admin"
+
+// Register mounts the routes on r (an authenticated group).
+func (h *Items) Register(r gin.IRoutes) {
+	admin := middleware.RequireRole(RoleAdmin)
+	r.POST("/items", admin, h.create)
+	r.GET("/items", h.list)
+	r.GET("/items/:id", h.get)
+	r.PATCH("/items/:id", admin, h.update)
+	r.DELETE("/items/:id", admin, h.delete)
+}
+{%- else %}
+
 // Register mounts the routes on r.
 func (h *Items) Register(r gin.IRoutes) {
 	r.POST("/items", h.create)
@@ -31,6 +50,7 @@ func (h *Items) Register(r gin.IRoutes) {
 	r.PATCH("/items/:id", h.update)
 	r.DELETE("/items/:id", h.delete)
 }
+{%- endif %}
 
 // ItemResponse is the JSON representation of an item.
 type ItemResponse struct {

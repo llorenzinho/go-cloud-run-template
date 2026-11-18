@@ -1,8 +1,18 @@
 # VS Code REST Client / JetBrains HTTP client.
+{%- if cookiecutter.use_auth == 'y' %}
+# @token is the end-user JWT: locally `task auth:token SUB=alice ROLES=admin`.
+# On Cloud Run the caller's IAM identity goes in X-Serverless-Authorization
+# (Cloud Run checks and strips it), set @iam_token to
+#   gcloud auth print-identity-token --impersonate-service-account=<caller> --audiences=<url> --include-email
+@base = http://localhost:8080
+@token =
+@iam_token =
+{%- else %}
 # Local: task run (no auth). Cloud Run: set @token to
 #   gcloud auth print-identity-token --impersonate-service-account=<caller> --audiences=<url> --include-email
 @base = http://localhost:8080
 @token =
+{%- endif %}
 
 ### Liveness
 GET {{ '{{' }}base{{ '}}' }}/healthz

@@ -76,6 +76,10 @@ services:
       context: .
     environment:
       {{ cookiecutter.env_prefix }}_LOG_FORMAT: json
+{%- if cookiecutter.use_auth == 'y' %}
+      # Dev key pair (task auth:keygen): tokens of task auth:token work here too.
+      {{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY_FILE: /auth/public.pem
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
       {{ cookiecutter.env_prefix }}_DB_HOST: postgres
       {{ cookiecutter.env_prefix }}_DB_PASSWORD: {{ cookiecutter.project_slug }}
@@ -83,6 +87,10 @@ services:
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
       {{ cookiecutter.env_prefix }}_REDIS_URL: redis://redis:6379/0
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+    volumes:
+      - ./.dev/auth:/auth:ro
 {%- endif %}
     ports:
       - "8080:8080"

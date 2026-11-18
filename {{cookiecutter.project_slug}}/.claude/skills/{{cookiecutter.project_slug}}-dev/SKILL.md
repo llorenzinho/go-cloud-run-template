@@ -1,6 +1,6 @@
 ---
 name: {{ cookiecutter.project_slug }}-dev
-description: Use when changing the {{ cookiecutter.project_name }} service in this repository - adding an endpoint{% if cookiecutter.use_postgres == 'y' %}, a table, a query, a migration or a transaction{% endif %}, a readiness check, a dependency or config key{% if cookiecutter.use_redis == 'y' %}, using Redis{% endif %}, writing tests, or touching the Dockerfile, GitHub workflows or the Pulumi deploy. Covers the layout, the conventions (samber/do + functional options, sqlc, goose, viper env overrides) and the commands to run before committing.
+description: Use when changing the {{ cookiecutter.project_name }} service in this repository - adding an endpoint{% if cookiecutter.use_postgres == 'y' %}, a table, a query, a migration or a transaction{% endif %}, a readiness check, a dependency or config key{% if cookiecutter.use_redis == 'y' %}, using Redis{% endif %}{% if cookiecutter.use_auth == 'y' %}, protecting a route or reading the caller (JWT auth, roles){% endif %}, writing tests, or touching the Dockerfile, GitHub workflows or the Pulumi deploy. Covers the layout, the conventions (samber/do + functional options, sqlc, goose, viper env overrides) and the commands to run before committing.
 ---
 
 # Developing {{ cookiecutter.project_name }}
@@ -19,6 +19,11 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
 | `internal/di` | samber/do providers: config → functional options of each constructor |
 | `internal/logger`{% if cookiecutter.use_postgres == 'y' %}, `internal/postgres`{% endif %}{% if cookiecutter.use_redis == 'y' %}, `internal/redis`{% endif %} | Constructors `New(..., opts ...Option)` |
 | `internal/health` | `Checker` interface + `Registry` run by `/readyz` |
+{%- if cookiecutter.use_auth == 'y' %}
+| `internal/auth` | JWT `Verifier` (jwks / static key, options), `Principal`, `FromContext`, `Dev` |
+| `internal/auth/authtest` | Signs tokens for tests and `cmd/devtoken` (never imported by the server) |
+| `cmd/devtoken` | Dev key pair + token signing (`task auth:keygen`, `task auth:token`) |
+{%- endif %}
 | `internal/http` | Router (`NewRouter`), server (`NewServer(h, opts...)`), `middleware/`, `handler/` |
 | `internal/domain` | Business types and sentinel errors (`ErrNotFound`, `ErrConflict`, `ErrInvalidInput`) |
 {%- if cookiecutter.__examples == 'y' %}
@@ -58,8 +63,18 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
   `binding.Validator = validation.Gin{}`; messages come from `validation.message`.
 - **Logs**: `*slog.Logger` from DI, `log.InfoContext(ctx, "msg", "key", v)`. JSON in
   production with `severity`/`message` keys for Cloud Logging. Never log secrets.
+{%- if cookiecutter.use_auth == 'y' %}
+- **Auth**: Cloud Run IAM admits the caller (`access.callers`, or allUsers with
+  `access.public`); the app verifies the end-user Bearer JWT on every route of the
+  `v1` group (`middleware.Authenticate`). Routes without a token go on the `public`
+  group (`<base_path>/v1/public/...`). Read the caller with `auth.FromContext(ctx)`,
+  restrict with `middleware.RequireRole("role")` (403). Never return the reason of a
+  401 to the client. Tests: `authtest.NewIssuer("RS256")`, `issuer.MustToken(...)`,
+  `issuer.Verifier(ctx)` (see `internal/http/auth_test.go`).
+{%- else %}
 - **Auth**: none in the app. Cloud Run only lets callers with `roles/run.invoker`
   through (`deploy/config/<stack>/config.yaml` → `access.callers`). Do not add JWT checks.
+{%- endif %}
 - **UUIDs**: stdlib `uuid` package (Go ≥ 1.27), `uuid.NewV7()` for new ids.
 {%- if cookiecutter.use_postgres == 'y' %}
 - **Queries**: sqlc methods take the DBTX (`emit_methods_with_db_argument`):
@@ -87,7 +102,7 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
 
 **New endpoint**: handler in `internal/http/handler` with a `Register(r gin.IRoutes)`
 method, service in `internal/service`, providers in `internal/di`, mount in
-`NewRouter` under the `v1` group. Add a router test like `internal/http/server_test.go`
+`NewRouter` under the `v1` group{% if cookiecutter.use_auth == 'y' %} (authenticated; `public` for open routes){% endif %}. Add a router test like `internal/http/server_test.go`
 and an integration test in `test/integration`.
 
 **New dependency**: `mise exec -- go get <module>@<version>`, then `task tidy`.

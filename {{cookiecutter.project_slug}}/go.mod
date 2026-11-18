@@ -3,8 +3,15 @@ module {{ cookiecutter.module_path }}
 go {{ cookiecutter.go_version }}
 
 require (
+{%- if cookiecutter.use_auth == 'y' %}
+	github.com/MicahParks/jwkset v0.11.3
+	github.com/MicahParks/keyfunc/v3 v3.8.2
+{%- endif %}
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.5
+{%- if cookiecutter.use_auth == 'y' %}
+	github.com/golang-jwt/jwt/v5 v5.3.1
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pressly/goose/v3 v3.29.0

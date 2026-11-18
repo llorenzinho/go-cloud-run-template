@@ -44,6 +44,12 @@ func (m *mocks) Call(args pulumi.MockCallArgs) (resource.PropertyMap, error) {
 
 func deploy(t *testing.T) *mocks {
 	t.Helper()
+	return deployWith(t, nil)
+}
+
+// deployWith runs the prod stack after edit changes its configuration.
+func deployWith(t *testing.T, edit func(*config.Config, *config.Secrets)) *mocks {
+	t.Helper()
 {%- if cookiecutter.use_postgres == 'y' %}
 	t.Setenv("DEPLOY_SECRET_DB_PASSWORD", "s3cr3t-pw")
 {%- endif %}
@@ -52,6 +58,9 @@ func deploy(t *testing.T) *mocks {
 {%- endif %}
 	cfg, sec, err := config.Load("../../config", "prod")
 	require.NoError(t, err)
+	if edit != nil {
+		edit(cfg, sec)
+	}
 
 	m := &mocks{resources: map[string]resource.PropertyMap{}}
 	err = pulumi.RunErr(func(ctx *pulumi.Context) error {
@@ -97,3 +106,36 @@ func TestServiceScalesToZero(t *testing.T) {
 	assert.Contains(t, string(raw), "{{ cookiecutter.env_prefix }}_DB_HOST")
 {%- endif %}
 }
+{%- if cookiecutter.use_auth == 'y' %}
+
+func TestAuthEnv(t *testing.T) {
+	m := deploy(t)
+	raw, err := json.Marshal(m.resources["gcp:cloudrunv2/service:Service::service"].Mappable())
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "{{ cookiecutter.env_prefix }}_AUTH_JWKS_URL")
+	assert.Contains(t, string(raw), "{{ cookiecutter.env_prefix }}_AUTH_ISSUER")
+	_, ok := m.resources["gcp:secretmanager/secret:Secret::auth-public-key"]
+	assert.False(t, ok, "jwks mode has no key secret")
+}
+
+func TestAuthStaticKeySecret(t *testing.T) {
+	m := deployWith(t, func(c *config.Config, s *config.Secrets) {
+		c.App.Auth.Mode = "static"
+		s.AuthPublicKey = "-----BEGIN PUBLIC KEY-----"
+	})
+	_, ok := m.resources["gcp:secretmanager/secret:Secret::auth-public-key"]
+	assert.True(t, ok)
+	raw, err := json.Marshal(m.resources["gcp:cloudrunv2/service:Service::service"].Mappable())
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "{{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY")
+	assert.NotContains(t, string(raw), "BEGIN PUBLIC KEY", "the key is referenced, not inlined")
+}
+
+func TestPublicAccess(t *testing.T) {
+	m := deployWith(t, func(c *config.Config, _ *config.Secrets) { c.Access.Public = true })
+	in, ok := m.resources["gcp:cloudrunv2/serviceIamMember:ServiceIamMember::invoker-public"]
+	require.True(t, ok)
+	assert.Equal(t, "allUsers", in["member"].StringValue())
+	assert.Equal(t, "roles/run.invoker", in["role"].StringValue())
+}
+{%- endif %}

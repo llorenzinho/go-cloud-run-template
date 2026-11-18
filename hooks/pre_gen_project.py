@@ -29,6 +29,7 @@ FLAGS = {
     "use_postgres": "{{ cookiecutter.use_postgres }}",
     "include_examples": "{{ cookiecutter.include_examples }}",
     "use_redis": "{{ cookiecutter.use_redis }}",
+    "use_auth": "{{ cookiecutter.use_auth }}",
     "create_github_repo": "{{ cookiecutter.create_github_repo }}",
     "setup_wif": "{{ cookiecutter.setup_wif }}",
 }

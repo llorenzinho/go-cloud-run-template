@@ -3,6 +3,9 @@
 # This file is the single source of configuration. Every key can be overridden
 # by an environment variable: {{ cookiecutter.env_prefix }}_ + key path in upper case with "." -> "_".
 #   http.trusted_proxies -> {{ cookiecutter.env_prefix }}_HTTP_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.1
+{%- if cookiecutter.use_auth == 'y' %}
+#   auth.audiences       -> {{ cookiecutter.env_prefix }}_AUTH_AUDIENCES=my-project,other
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 #   db.password          -> {{ cookiecutter.env_prefix }}_DB_PASSWORD
 #   db.pool.max_conns    -> {{ cookiecutter.env_prefix }}_DB_POOL_MAX_CONNS
@@ -70,4 +73,38 @@ db:
 redis:
   url: redis://localhost:6379/0
   pool_size: 0 # 0 = go-redis default (10 per CPU)
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+
+# Bearer JWT verification of <base_path>/v*/... (except <base_path>/v*/public/...).
+# Local values: tokens of `task auth:token`, signed with the key pair of
+# `task auth:keygen` (.dev/auth, git-ignored). Deploys set the real IdP:
+#   Firebase: mode jwks, issuer https://securetoken.google.com/<project>,
+#             audiences [<project>],
+#             jwks.url https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com
+#   ZITADEL:  mode jwks, issuer https://<instance>.zitadel.cloud, audiences [<project id>],
+#             jwks.url https://<instance>.zitadel.cloud/oauth/v2/keys,
+#             roles_claim urn:zitadel:iam:org:project:roles
+auth:
+  # false = no verification, every request is dev_principal (only with env: dev).
+  enabled: true
+  mode: static # jwks | static
+  issuer: https://dev.{{ cookiecutter.project_slug }}.local
+  audiences: [{{ cookiecutter.project_slug }}]
+  algorithms: [RS256] # asymmetric only; none and HS* are always rejected
+  clock_skew: 30s
+  roles_claim: roles # dotted path: array of strings or object whose keys are roles
+  token_types: [] # accepted `typ` headers, e.g. [at+jwt]; empty = not checked
+  jwks:
+    url: ""
+    fetch_timeout: 5s
+    refresh_interval: 1h
+    unknown_kid_interval: 5m # min interval of the refreshes on an unknown kid
+  static:
+    public_key: "" # inline PEM (wins over the file), e.g. from a secret env var
+    public_key_file: .dev/auth/public.pem
+  dev_principal: # identity of every request when enabled is false
+    subject: dev
+    email: dev@example.com
+    roles: [admin]
 {%- endif %}

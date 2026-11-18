@@ -2,7 +2,7 @@
 
 {{ cookiecutter.description }}.
 
-Go · gin{% if cookiecutter.use_postgres == 'y' %} · Postgres (pgx + sqlc + goose){% endif %}{% if cookiecutter.use_redis == 'y' %} · Redis{% endif %} · viper · slog JSON · samber/do ·
+Go · gin{% if cookiecutter.use_postgres == 'y' %} · Postgres (pgx + sqlc + goose){% endif %}{% if cookiecutter.use_redis == 'y' %} · Redis{% endif %}{% if cookiecutter.use_auth == 'y' %} · Bearer JWT (JWKS / static key){% endif %} · viper · slog JSON · samber/do ·
 mise · Taskfile · GitHub Actions → Artifact Registry (WIF) · Cloud Run via Pulumi.
 
 ## Quick start
@@ -20,6 +20,13 @@ API: `{{ cookiecutter.base_path }}/v1/items` (example CRUD, see [Removing the ex
 probes `/healthz` and `/readyz`. See `api/http/items.http`.
 {%- else -%}
 API under `{{ cookiecutter.base_path }}/v1` (mount handlers in `internal/http.NewRouter`), probes `/healthz` and `/readyz`.
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+API routes need a Bearer JWT (see [Authentication](#authentication)):
+
+```sh
+curl -H "Authorization: Bearer $(task auth:token SUB=alice ROLES=admin)" localhost:8080{{ cookiecutter.base_path }}/v1/me
+```
 {%- endif %}
 
 ### Probes
@@ -126,6 +133,53 @@ In CI export the same `{{ cookiecutter.env_prefix }}_DB_*` variables and run `ta
 Agents: `AGENTS.md` and the `{{ cookiecutter.project_slug }}-dev` skill (`.claude/skills`, linked in `.opencode/skills`).
 
 ## Authentication
+{%- if cookiecutter.use_auth == 'y' %}
+
+Two layers:
+
+1. **Cloud Run IAM** admits the caller: the service accounts in `access.callers`
+   (`deploy/config/<stack>/config.yaml`) get `roles/run.invoker`. A caller (e.g. the
+   goserve gateway with `upstream_auth: google_id_token`) sends its Google ID token in
+   `X-Serverless-Authorization`, which Cloud Run checks and strips. With
+   `access.public: true`, allUsers get the role instead and layer 2 is the only gate.
+2. **The app** verifies the end user's `Authorization: Bearer <JWT>` on every route under
+   `{{ cookiecutter.base_path }}/v*` except `{{ cookiecutter.base_path }}/v*/public/...`; `/healthz` and `/readyz`
+   stay open. Failures answer 401 (`WWW-Authenticate: Bearer`, the reason is only in
+   the logs), a missing role 403.
+
+`auth.*` in `configs/config.yaml` (deploy: `app.auth`):
+
+| Key | |
+|---|---|
+| `mode` | `jwks` (keys from `jwks.url`, cached, refreshed every `jwks.refresh_interval` and on an unknown `kid`) or `static` (PEM public key: `static.public_key`, or `static.public_key_file`) |
+| `issuer`, `audiences` | `iss` must match, `aud` must contain one of them |
+| `algorithms` | allowlist, default `[RS256]`; `none` and HS* are always rejected |
+| `roles_claim` | dotted path of the roles: an array (Firebase custom claim `roles`) or an object whose keys are the roles (ZITADEL `urn:zitadel:iam:org:project:roles`) |
+| `token_types` | optional `typ` allowlist, e.g. `[at+jwt]` for ZITADEL access tokens |
+| `enabled` | `false` (env=dev only) logs every request in as `dev_principal` |
+
+| IdP | `issuer` | `audiences` | `jwks.url` |
+|---|---|---|---|
+| Firebase / Identity Platform | `https://securetoken.google.com/<project>` | `[<project>]` | `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` |
+| ZITADEL | `https://<instance>.zitadel.cloud` | `[<project id>]` | `https://<instance>.zitadel.cloud/oauth/v2/keys` |
+
+Firebase clients send their ID token, ZITADEL clients a JWT access token (set the
+application's token type to JWT); both are accepted. In jwks mode `/readyz` has an
+`auth_jwks` check, down until the keys are fetched once (startup never fails on it).
+
+Handlers read the caller with `auth.FromContext(ctx)` (`Subject`, `Email`, `Roles`,
+`Claims`); `middleware.RequireRole("admin")` restricts a route. `GET {{ cookiecutter.base_path }}/v1/me`
+returns the caller.
+
+Local development uses static mode with a dev key pair (`.dev/auth`, git-ignored):
+
+```sh
+task auth:keygen                                  # once (also run by task setup)
+task auth:token SUB=alice ROLES=admin TTL=1h      # signed token for the local config
+```
+
+Tests sign tokens with `internal/auth/authtest` (`NewIssuer`, `Token`, `Verifier`, `JWKS`).
+{%- else %}
 
 None in the code. The Cloud Run service has no public binding: only the service
 accounts in `access.callers` (`deploy/config/<stack>/config.yaml`) get
@@ -140,6 +194,7 @@ curl -H "Authorization: Bearer $TOKEN" <service url>{{ cookiecutter.base_path }}
 ```
 
 From Go, `google.golang.org/api/idtoken.NewClient(ctx, "<service url>")` does the same.
+{%- endif %}
 
 ## Releases and images
 
@@ -182,7 +237,9 @@ task deploy:check deploy:preview deploy:up STACK=dev
 It creates: the runtime service account `<service>-run`{% if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}, Secret Manager secrets
 ({% if cookiecutter.use_postgres == 'y' %}`<service>-db-password`{% endif %}{% if cookiecutter.use_postgres == 'y' and cookiecutter.use_redis == 'y' %}, {% endif %}{% if cookiecutter.use_redis == 'y' %}`<service>-redis-url`{% endif %}) readable only by it{% endif %}, and the Cloud Run service
 (min 0 instances, CPU only during requests, startup probe `/readyz`, liveness
-`/healthz`) with `roles/run.invoker` for each caller.
+`/healthz`) with `roles/run.invoker` for each caller{% if cookiecutter.use_auth == 'y' %} (and allUsers with
+`access.public: true`). `app.auth` becomes `{{ cookiecutter.env_prefix }}_AUTH_*`; in static mode the public key
+is the secret `auth_public_key` (Secret Manager `<service>-auth-public-key`){% endif %}.
 
 {%- if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}
 {% if cookiecutter.use_postgres == 'y' %}Postgres{% endif %}{% if cookiecutter.use_postgres == 'y' and cookiecutter.use_redis == 'y' %} and {% endif %}{% if cookiecutter.use_redis == 'y' %}Redis{% endif %} run outside the stack: scale to zero rules out an
@@ -209,12 +266,13 @@ The `items` example only shows the layers; delete it when you add your own code:
 ```sh
 rm db/migrations/00002_create_items.sql db/queries/items.sql db/seed/00001_items.sql \
    internal/domain/item.go internal/http/handler/items.go internal/http/items_test.go \
-   test/integration/items_test.go api/http/items.http
+   test/integration/items_test.go api/http/items.http{% if cookiecutter.use_auth == 'y' %} \
+   internal/http/handler/public.go{% endif %}
 rm -r internal/repository internal/service
 ```
 
 Then remove the blocks between `// example:begin` and `// example:end` in
 `internal/di/di.go` and the `Items` field in `internal/http/server.go` (`Deps` and
-`NewRouter`), and run `task sqlc tidy test`. Already applied the migration locally?
+`NewRouter`{% if cookiecutter.use_auth == 'y' %}, plus `handler.Public{}` and the example tests in `internal/http/auth_test.go`{% endif %}), and run `task sqlc tidy test`. Already applied the migration locally?
 `task db:reset`.
 {%- endif %}

@@ -17,6 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+{%- if cookiecutter.use_auth == 'y' %}
+	"{{ cookiecutter.module_path }}/internal/auth"
+{%- endif %}
 	"{{ cookiecutter.module_path }}/internal/health"
 	ihttp "{{ cookiecutter.module_path }}/internal/http"
 	"{{ cookiecutter.module_path }}/internal/http/handler"
@@ -61,6 +64,10 @@ func startServer(t *testing.T, mount ...func(*ihttp.Deps, stack)) string {
 		BasePath: "{{ cookiecutter.base_path }}",
 		Log:      st.Log,
 		Health:   handler.NewHealth(health.NewRegistry(checks...)),
+{%- if cookiecutter.use_auth == 'y' %}
+		// Token verification has its own tests: here every request is an admin.
+		Auth: auth.Dev{Principal: auth.Principal{Subject: "integration", Roles: []string{"admin"}}},
+{%- endif %}
 	}
 	for _, f := range mount {
 		f(&d, st)

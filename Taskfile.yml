@@ -3,7 +3,8 @@ version: "3"
 # Template tests: render the template without touching GitHub/GCP and run the
 # generated project's checks. Output goes to .bake/ (git-ignored).
 #
-# A variant is PG EX REDIS (y/n each): use_postgres, include_examples, use_redis.
+# A variant is PG EX REDIS AUTH (y/n each): use_postgres, include_examples,
+# use_redis, use_auth.
 
 vars:
   OUT: "{{.ROOT_DIR}}/.bake"
@@ -11,28 +12,30 @@ vars:
   OPTS: >-
     create_github_repo=n setup_wif=n github_owner=example gcp_project=example-project
     ar_repository=containers wif_pool=github wif_service_account=ci@example-project.iam.gserviceaccount.com
-  # Variants checked by verify: full, postgres without examples, bare, redis only, everything.
-  VARIANTS: yyn ynn nnn nny yyy
+  # Variants checked by verify: full, postgres without examples, bare, redis
+  # only, everything, auth only.
+  VARIANTS: yynn ynnn nnnn nnyn yyyy nnny
 
 tasks:
   default:
     cmds: [task --list]
 
   bake:
-    desc: "Render one variant into .bake/demo-<PG><EX><REDIS>: task bake V=yyn"
+    desc: "Render one variant into .bake/demo-<PG><EX><REDIS><AUTH>: task bake V=yyny"
     vars:
-      V: '{{.V | default "yyn"}}'
+      V: '{{.V | default "yyny"}}'
       PG: '{{index (splitList "" .V) 0}}'
       EX: '{{index (splitList "" .V) 1}}'
       REDIS: '{{index (splitList "" .V) 2}}'
+      AUTH: '{{index (splitList "" .V) 3}}'
     cmds:
       - rm -rf {{.OUT}}/demo-{{.V}}
-      - cookiecutter --no-input -o {{.OUT}} . project_name=demo-{{.V}} use_postgres={{.PG}} include_examples={{.EX}} use_redis={{.REDIS}} {{.OPTS}}
+      - cookiecutter --no-input -o {{.OUT}} . project_name=demo-{{.V}} use_postgres={{.PG}} include_examples={{.EX}} use_redis={{.REDIS}} use_auth={{.AUTH}} {{.OPTS}}
 
   verify:one:
-    desc: "Bake one variant and run build, lint, sqlc check, unit tests, docker build, deploy check: task verify:one V=ynn"
+    desc: "Bake one variant and run build, lint, sqlc check, unit tests, docker build, deploy check: task verify:one V=ynnn"
     vars:
-      V: '{{.V | default "yyn"}}'
+      V: '{{.V | default "yyny"}}'
       DIR: "{{.OUT}}/demo-{{.V}}"
     cmds:
       - task: bake

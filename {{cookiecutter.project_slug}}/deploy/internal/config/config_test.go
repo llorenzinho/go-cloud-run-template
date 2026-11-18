@@ -122,3 +122,40 @@ func TestDBPasswordRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "db_password")
 }
 {%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+
+func TestAuth(t *testing.T) {
+	setSecrets(t)
+	cfg, _, err := config.Load(writeStack(t, overlay), "test")
+	require.NoError(t, err)
+	assert.Equal(t, "jwks", cfg.App.Auth.Mode)
+	assert.False(t, cfg.Access.Public)
+
+	t.Run("static needs the public key secret", func(t *testing.T) {
+		setSecrets(t)
+		t.Setenv("DEPLOY_APP_AUTH_MODE", "static")
+		_, _, err := config.Load(writeStack(t, overlay), "test")
+		require.ErrorContains(t, err, "auth_public_key")
+
+		t.Setenv("DEPLOY_SECRET_AUTH_PUBLIC_KEY", "-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----\n")
+		_, sec, err := config.Load(writeStack(t, overlay), "test")
+		require.NoError(t, err)
+		assert.NotEmpty(t, sec.AuthPublicKey)
+	})
+
+	t.Run("jwks needs a url", func(t *testing.T) {
+		setSecrets(t)
+		t.Setenv("DEPLOY_APP_AUTH_JWKS_URL", "")
+		_, _, err := config.Load(writeStack(t, overlay), "test")
+		require.ErrorContains(t, err, "app.auth.jwks_url")
+	})
+
+	t.Run("public needs no caller", func(t *testing.T) {
+		setSecrets(t)
+		cfg, _, err := config.Load(writeStack(t, base+dbApp+"access: {callers: [], public: true}\n"), "test")
+		require.NoError(t, err)
+		assert.True(t, cfg.Access.Public)
+		assert.NotEmpty(t, cfg.Warnings())
+	})
+}
+{%- endif %}

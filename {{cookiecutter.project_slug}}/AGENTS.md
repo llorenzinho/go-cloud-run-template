@@ -10,5 +10,12 @@ available to opencode as `.opencode/skills/{{ cookiecutter.project_slug }}-dev`)
 {%- endif %}
 - Two Go modules: the server (root) and `deploy/` (Pulumi). Run `task tidy`, `task lint`
   and `task test` for both.
+{%- if cookiecutter.use_auth == 'y' %}
+- Every route under `<base_path>/v*` needs a Bearer JWT (`internal/auth`, verified by
+  `middleware.Authenticate`), except `<base_path>/v*/public/...`. Read the caller with
+  `auth.FromContext`, restrict with `middleware.RequireRole`. Test with
+  `internal/auth/authtest`, run locally with `task auth:token`.
+{%- else %}
 - No authentication code in the app: Cloud Run IAM (`roles/run.invoker`) is the only gate.
+{%- endif %}
 - Conventional Commits only (`feat:`, `fix:`, `chore:` …).

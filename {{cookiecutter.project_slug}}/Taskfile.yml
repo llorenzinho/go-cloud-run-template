@@ -35,6 +35,11 @@ tasks:
       - cmd: test -f .env || cp .env.example .env
         silent: true
       - task: hooks:install
+{%- endraw %}
+{%- if cookiecutter.use_auth == 'y' %}
+      - task: auth:keygen
+{%- endif %}
+{%- raw %}
 
   hooks:install:
     desc: Install pre-commit hooks (pre-commit + commit-msg)
@@ -105,6 +110,27 @@ tasks:
       - $X go tool cover -func=coverage.out | tail -1
 
 {%- endraw %}
+{%- if cookiecutter.use_auth == 'y' %}
+
+  # --- auth (Bearer JWT) -----------------------------------------------------
+{%- raw %}
+
+  auth:keygen:
+    desc: "Create the local dev key pair in .dev/auth (git-ignored): task auth:keygen [-- -alg ES256 -force]"
+    cmds:
+      - $X go run ./cmd/devtoken keygen {{.CLI_ARGS}}
+
+  auth:token:
+    desc: "Sign a dev token for the local config: task auth:token SUB=alice ROLES=admin TTL=1h"
+    vars:
+      SUB: '{{.SUB | default "dev-user"}}'
+      ROLES: '{{.ROLES | default ""}}'
+      TTL: '{{.TTL | default "1h"}}'
+    silent: true
+    cmds:
+      - $X go run ./cmd/devtoken token -sub '{{.SUB}}' -roles '{{.ROLES}}' -ttl '{{.TTL}}'
+{%- endraw %}
+{%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 
   # --- database (Postgres + sqlc + goose) -----------------------------------

@@ -13,6 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+	"{{ cookiecutter.module_path }}/internal/auth"
+{%- endif %}
 	"{{ cookiecutter.module_path }}/internal/http/handler"
 	"{{ cookiecutter.module_path }}/internal/http/middleware"
 	"{{ cookiecutter.module_path }}/internal/validation"
@@ -28,6 +32,10 @@ type Deps struct {
 	RequestTimeout time.Duration
 	Log            *slog.Logger
 	Health         *handler.Health
+{%- if cookiecutter.use_auth == 'y' %}
+	// Auth verifies the Bearer token of the API routes (auth.Verifier, or auth.Dev).
+	Auth auth.Authenticator
+{%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
 	Items *handler.Items
 {%- endif %}
@@ -37,11 +45,29 @@ type Deps struct {
 func APIPath(basePath string) string {
 	return basePath + "/v1"
 }
+{%- if cookiecutter.use_auth == 'y' %}
+
+// PublicPath is the group of an API version reachable without a token:
+// "/orders/v1" -> "/orders/v1/public".
+func PublicPath(apiPath string) string {
+	return apiPath + "/public"
+}
+
+// NewRouter builds the gin engine with middlewares and routes. Cloud Run IAM
+// (roles/run.invoker) admits the caller; every API route then needs a valid
+// Bearer JWT, except those under <base_path>/v*/public.
+{%- else %}
 
 // NewRouter builds the gin engine with middlewares and routes. Callers are
 // authenticated by Cloud Run (roles/run.invoker): requests reaching the
 // container already carry a verified Google identity.
+{%- endif %}
 func NewRouter(d Deps) (*gin.Engine, error) {
+{%- if cookiecutter.use_auth == 'y' %}
+	if d.Auth == nil {
+		return nil, errors.New("router: Deps.Auth is required (auth.Verifier, or auth.Dev in local dev)")
+	}
+{%- endif %}
 	binding.Validator = validation.Gin{}
 	r := gin.New()
 	r.ContextWithFallback = true
@@ -59,11 +85,28 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 
 	d.Health.Register(r)
 
+{%- if cookiecutter.use_auth == 'y' %}
+
+	// Every route of v1 needs a token, except those of v1/public (a new API
+	// version gets its own group the same way).
+	api := APIPath(d.BasePath)
+	v1 := r.Group(api, middleware.Authenticate(d.Auth, d.Log, PublicPath(api)))
+	public := v1.Group("/public")
+	handler.Me{}.Register(v1)
+{%- if cookiecutter.__examples == 'y' %}
+	handler.Public{}.Register(public) // example
+	d.Items.Register(v1)
+{%- else %}
+	_ = public // mount routes without authentication here: h.Register(public)
+{%- endif %}
+{%- else %}
+
 	v1 := r.Group(APIPath(d.BasePath))
 {%- if cookiecutter.__examples == 'y' %}
 	d.Items.Register(v1)
 {%- else %}
 	_ = v1 // mount your handlers here: h.Register(v1)
+{%- endif %}
 {%- endif %}
 
 	r.NoRoute(func(c *gin.Context) {
