@@ -281,9 +281,8 @@ Next steps:
     if CREATE_REPO:
         print(f"""  Release: merge the release-please PR on https://github.com/{REPO}/pulls
            -> tag v0.1.0 -> workflow "image" pushes {image}:v0.1.0
-  Deploy:  edit deploy/config/dev/config.yaml (project, access.callers{', app.db' if USE_POSTGRES else ''}),
-           cp deploy/config/dev/secret.example.yaml deploy/config/dev/secret.yaml
-           task deploy:check deploy:up STACK=dev
+  Deploy:  cd deploy && pulumi stack init dev, edit Pulumi.dev.yaml (access.callers{', app.db' if USE_POSTGRES else ''}),
+           {'pulumi config set --secret db_password <pw>, ' if USE_POSTGRES else ''}task deploy:up STACK=dev
 """)
 
 

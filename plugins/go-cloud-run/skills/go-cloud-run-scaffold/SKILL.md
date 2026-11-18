@@ -98,8 +98,8 @@ Tell the user, briefly:
   by the template);
 - local database (with Postgres): `task db:seed` migrates and loads the example data;
   other databases: `task migrate:up ENV=<env>` with `.env.<env>` (from `.env.prod.example`);
-- to deploy: edit `deploy/config/dev/config.yaml` (`access.callers`, `app.db` host/user/name),
-  copy `deploy/config/dev/secret.example.yaml` to `secret.yaml` (`db_password`), then
-  `task deploy:check deploy:up STACK=dev`;
+- to deploy: `cd deploy && pulumi stack init dev`, edit `Pulumi.dev.yaml` (`access.callers`,
+  `app.db` host/user/name), `pulumi config set --secret db_password …`, then
+  `task deploy:up STACK=dev`;
 - with examples: the README lists the files to delete to drop `items`;
 - the project has its own `<slug>-dev` skill and `AGENTS.md` for further work.

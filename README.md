@@ -105,7 +105,7 @@ Or pass them on the command line: `cookiecutter … gcp_project=my-project …`.
 
 ```sh
 task bake V=yyny           # render use_postgres/include_examples/use_redis/use_auth = y/y/n/y into .bake/demo-yyny
-task verify:one V=ynnn     # bake one variant: build, lint, unit tests, docker build, sqlc check, deploy check
+task verify:one V=ynnn     # bake one variant: build, lint, unit tests (incl. deploy stacks), docker build, sqlc check
 task verify                # every variant in VARIANTS (yynn ynnn nnnn nnyn yyyy nnny)
 task verify:integration    # testcontainers integration tests of the baked variants
 ```

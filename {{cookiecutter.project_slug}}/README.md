@@ -124,7 +124,7 @@ In CI export the same `{{ cookiecutter.env_prefix }}_DB_*` variables and run `ta
 | `task fmt lint test` | Format, lint, unit tests (server + deploy module) |
 | `task test:integration` | Integration tests with testcontainers (Docker) |
 {%- if cookiecutter.use_postgres == 'y' %}
-| `task db:up` / `db:down` / `db:reset` / `db:psql` / `db:seed` | Local Postgres (compose) |
+| `task db:reset` / `db:psql` / `db:seed` | Local Postgres (compose) |
 | `task sqlc` / `task sqlc:check` | Generate / check sqlc code |
 | `task migrate:create -- name` | New goose migration; `migrate:up\|down\|status [ENV=<name>]` |
 {%- endif %}
@@ -138,7 +138,7 @@ Agents: `AGENTS.md` and the `{{ cookiecutter.project_slug }}-dev` skill (`.claud
 Two layers:
 
 1. **Cloud Run IAM** admits the caller: the service accounts in `access.callers`
-   (`deploy/config/<stack>/config.yaml`) get `roles/run.invoker`. A caller (an API
+   (`deploy/Pulumi.<stack>.yaml`) get `roles/run.invoker`. A caller (an API
    gateway, another service) sends its own Google ID token in
    `X-Serverless-Authorization`, which Cloud Run checks and strips, and forwards the
    user's `Authorization` header unchanged. With
@@ -183,7 +183,7 @@ Tests sign tokens with `internal/auth/authtest` (`NewIssuer`, `Token`, `Verifier
 {%- else %}
 
 None in the code. The Cloud Run service has no public binding: only the service
-accounts in `access.callers` (`deploy/config/<stack>/config.yaml`) get
+accounts in `access.callers` (`deploy/Pulumi.<stack>.yaml`) get
 `roles/run.invoker`, and Cloud Run rejects every other request. Callers send a
 Google ID token whose audience is the service URL:
 
@@ -201,7 +201,7 @@ From Go, `google.golang.org/api/idtoken.NewClient(ctx, "<service url>")` does th
 
 Commits follow Conventional Commits (pre-commit hook). On `main`, release-please
 keeps a release PR open; merging it tags `vX.Y.Z`, updates `CHANGELOG.md` and
-`deploy/config/default.yaml` (`image.tag`), and calls the `image` workflow, which
+the image tag in `deploy/internal/config/config.go` (`Default`), and calls the `image` workflow, which
 pushes `{{ cookiecutter.gcp_region }}-docker.pkg.dev/{{ cookiecutter.gcp_project }}/{{ cookiecutter.ar_repository }}/{{ cookiecutter.project_slug }}:<tag>` (+ `latest`).
 Rebuild a tag by hand: `gh workflow run image.yml -f tag=v0.1.0`.
 
@@ -222,17 +222,19 @@ the service account needs `roles/artifactregistry.writer` on the repository.
 
 ## Deploy (Pulumi)
 
-`deploy/` is a separate Go module. Stack config: `deploy/config/default.yaml` +
-`deploy/config/<stack>/config.yaml` + git-ignored `deploy/config/<stack>/secret.yaml`
-(or `DEPLOY_SECRET_*` env vars).
+`deploy/` is a separate Go module. Stack config is Pulumi config: `deploy/Pulumi.<stack>.yaml`
+sets only what differs from `config.Default()` (`deploy/internal/config/config.go`);
+secrets are Pulumi secrets, stored encrypted in the stack file.
 
 ```sh
 gcloud auth application-default login
+cd deploy
 pulumi login gs://<state bucket>          # once
-cp deploy/config/dev/secret.example.yaml deploy/config/dev/secret.yaml   # secrets{% if cookiecutter.use_postgres == 'y' %}: db_password{% endif %}{% if cookiecutter.use_redis == 'y' %}, redis_url{% endif %}
-$EDITOR deploy/config/dev/config.yaml     # project, access.callers{% if cookiecutter.use_postgres == 'y' %}, app.db (host, user, name){% endif %}
-cd deploy && pulumi stack init dev && cd ..
-task deploy:check deploy:preview deploy:up STACK=dev
+pulumi stack init dev                     # once; keeps the committed Pulumi.dev.yaml
+$EDITOR Pulumi.dev.yaml                   # project, access.callers{% if cookiecutter.use_postgres == 'y' %}, app.db (host, user, name){% endif %}{% if cookiecutter.use_auth == 'y' %}, app.auth{% endif %}
+{% if cookiecutter.use_postgres == 'y' %}pulumi config set --secret db_password '<password>'
+{% endif %}{% if cookiecutter.use_redis == 'y' %}pulumi config set --secret redis_url 'rediss://…'
+{% endif %}cd .. && task deploy:preview deploy:up STACK=dev
 ```
 
 It creates: the runtime service account `<service>-run`{% if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}, Secret Manager secrets

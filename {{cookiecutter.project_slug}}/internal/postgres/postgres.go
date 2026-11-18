@@ -180,9 +180,6 @@ func (d *DB) DBTX() sqlc.DBTX {
 	return timeoutDB{inner: d.Pool, timeout: d.queryTimeout}
 }
 
-// Schema returns the search_path of the connections.
-func (d *DB) Schema() string { return d.schema }
-
 // Shutdown closes the pool.
 func (d *DB) Shutdown() { d.Pool.Close() }
 

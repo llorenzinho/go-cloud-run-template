@@ -33,7 +33,7 @@ tasks:
       - cookiecutter --no-input -o {{.OUT}} . project_name=demo-{{.V}} use_postgres={{.PG}} include_examples={{.EX}} use_redis={{.REDIS}} use_auth={{.AUTH}} {{.OPTS}}
 
   verify:one:
-    desc: "Bake one variant and run build, lint, sqlc check, unit tests, docker build, deploy check: task verify:one V=ynnn"
+    desc: "Bake one variant and run build, lint, sqlc check, unit tests (incl. deploy stacks), docker build: task verify:one V=ynnn"
     vars:
       V: '{{.V | default "yyny"}}'
       DIR: "{{.OUT}}/demo-{{.V}}"
@@ -42,7 +42,6 @@ tasks:
         vars: { V: "{{.V}}" }
       - cd {{.DIR}} && task build lint test docker:build
       - cd {{.DIR}} && if test -f sqlc.yaml; then task sqlc:check; fi
-      - cd {{.DIR}} && DEPLOY_SECRET_DB_PASSWORD=x DEPLOY_SECRET_REDIS_URL=redis://h:6379/0 task deploy:check STACK=dev
 
   verify:
     desc: Bake every variant in VARIANTS and verify it

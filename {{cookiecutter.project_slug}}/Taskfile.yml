@@ -19,7 +19,7 @@ vars:
   ENV: ""
   LOAD_ENV: '{{if .ENV}}set -a && . ./.env.{{.ENV}} && set +a &&{{end}}'
   BIN: bin/{{.NAME}}
-  # Deploy stack (deploy/config/<STACK>/): task deploy:preview STACK=prod
+  # Deploy stack (deploy/Pulumi.<STACK>.yaml): task deploy:preview STACK=prod
   STACK: dev
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
@@ -103,12 +103,6 @@ tasks:
       - $X go mod tidy
       - cd deploy && $X go mod tidy
 
-  cover:
-    desc: Unit + integration coverage report
-    cmds:
-      - $X go test -tags integration -coverprofile=coverage.out ./...
-      - $X go tool cover -func=coverage.out | tail -1
-
 {%- endraw %}
 {%- if cookiecutter.use_auth == 'y' %}
 
@@ -136,23 +130,13 @@ tasks:
   # --- database (Postgres + sqlc + goose) -----------------------------------
 {%- raw %}
 
-  db:up:
-    desc: Start the local Postgres (docker compose)
-    cmds:
-      - docker compose up -d --wait postgres
-
-  db:down:
-    desc: Stop the local Postgres (keeps the data)
-    cmds:
-      - docker compose stop postgres
-
   db:reset:
     desc: Drop the local Postgres data and start it again
     prompt: Delete every row of the local database?
     cmds:
       - docker compose rm -sfv postgres
       - docker volume rm -f {{.NAME}}_pgdata
-      - task: db:up
+      - task: compose:up
 
   db:psql:
     desc: psql shell on the local database (search_path = service schema)
@@ -166,7 +150,7 @@ tasks:
       SEEDS:
         sh: ls db/seed/*.sql 2>/dev/null || true
     cmds:
-      - task: db:up
+      - task: compose:up
       - task: migrate:up
       - for: { var: SEEDS }
         cmd: docker compose exec -T -e PGOPTIONS="-c search_path={{.SCHEMA}}" postgres psql -q -v ON_ERROR_STOP=1 -U {{.NAME}} -d {{.NAME}} < {{.ITEM}}
@@ -252,23 +236,15 @@ tasks:
     cmds:
       - docker build --build-arg VERSION={{.VERSION}} -t {{.NAME}}:{{.VERSION}} .
 
-  deploy:check:
-    desc: "Validate a stack's deploy config and secrets without Pulumi: task deploy:check STACK=prod"
-    dir: deploy
-    cmds:
-      - $X go run . -check -stack {{.STACK}}
-
   deploy:preview:
     desc: "pulumi preview of a stack: task deploy:preview STACK=prod"
     dir: deploy
-    deps: [deploy:check]
     cmds:
       - $X pulumi preview --stack {{.STACK}} {{.CLI_ARGS}}
 
   deploy:up:
     desc: "pulumi up of a stack: task deploy:up STACK=prod"
     dir: deploy
-    deps: [deploy:check]
     cmds:
       - $X pulumi up --stack {{.STACK}} {{.CLI_ARGS}}
 
@@ -279,7 +255,7 @@ tasks:
       - $X pulumi destroy --stack {{.STACK}} {{.CLI_ARGS}}
 
   deploy:test:
-    desc: Run the deploy module tests (config validation, Pulumi mocks)
+    desc: Run the deploy module tests (committed stack configs, Pulumi mocks)
     dir: deploy
     cmds:
       - $X gotestsum --format pkgname -- -race -count=1 ./...

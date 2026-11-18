@@ -72,7 +72,7 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
   `issuer.Verifier(ctx)` (see `internal/http/auth_test.go`).
 {%- else %}
 - **Auth**: none in the app. Cloud Run only lets callers with `roles/run.invoker`
-  through (`deploy/config/<stack>/config.yaml` → `access.callers`). Do not add JWT checks.
+  through (`deploy/Pulumi.<stack>.yaml` → `access.callers`). Do not add JWT checks.
 {%- endif %}
 - **UUIDs**: stdlib `uuid` package (Go ≥ 1.27), `uuid.NewV7()` for new ids.
 {%- if cookiecutter.use_postgres == 'y' %}

@@ -50,7 +50,7 @@
     ".": {
       "component": "{{ cookiecutter.project_slug }}",
       "extra-files": [
-        "deploy/config/default.yaml"
+        "deploy/internal/config/config.go"
       ]
     }
   }

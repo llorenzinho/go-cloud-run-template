@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pulumi/pulumi-gcp/sdk/v9/go/gcp"
 	"github.com/pulumi/pulumi-gcp/sdk/v9/go/gcp/cloudrunv2"
@@ -32,6 +33,12 @@ var ingress = map[string]string{
 	"all":                               "INGRESS_TRAFFIC_ALL",
 	"internal":                          "INGRESS_TRAFFIC_INTERNAL_ONLY",
 	"internal-and-cloud-load-balancing": "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+}
+
+// secretValue is a Pulumi secret stored in Secret Manager as <service>-<name>.
+type secretValue struct {
+	name, env string
+	value     pulumi.StringOutput
 }
 
 // secretEnv is a server env var read from Secret Manager.
@@ -68,7 +75,7 @@ func Deploy(ctx *pulumi.Context, cfg *config.Config, sec *config.Secrets) error 
 		return err
 	}
 
-	values := []struct{ name, env, value string }{
+	values := []secretValue{
 {%- if cookiecutter.use_postgres == 'y' %}
 		{"db-password", config.EnvPrefixApp + "_DB_PASSWORD", sec.DBPassword},
 {%- endif %}
@@ -79,7 +86,7 @@ func Deploy(ctx *pulumi.Context, cfg *config.Config, sec *config.Secrets) error 
 {%- if cookiecutter.use_auth == 'y' %}
 	if cfg.App.Auth.Mode == "static" {
 		// Not confidential, but versioned and rotated like the other secrets.
-		values = append(values, struct{ name, env, value string }{"auth-public-key", config.EnvPrefixApp + "_AUTH_STATIC_PUBLIC_KEY", sec.AuthPublicKey})
+		values = append(values, secretValue{"auth-public-key", config.EnvPrefixApp + "_AUTH_STATIC_PUBLIC_KEY", sec.AuthPublicKey})
 	}
 {%- endif %}
 	secrets := make([]secretEnv, 0, len(values))
@@ -125,7 +132,7 @@ func enableAPIs(ctx *pulumi.Context, cfg *config.Config, opts []pulumi.ResourceO
 }
 
 // secret stores value in Secret Manager as <service>-<name>, readable by the runtime SA only.
-func secret(ctx *pulumi.Context, cfg *config.Config, name, value string, sa *serviceaccount.Account,
+func secret(ctx *pulumi.Context, cfg *config.Config, name string, value pulumi.StringOutput, sa *serviceaccount.Account,
 	opts []pulumi.ResourceOption,
 ) (*secretmanager.SecretVersion, pulumi.Resource, error) {
 	s, err := secretmanager.NewSecret(ctx, name, &secretmanager.SecretArgs{
@@ -139,7 +146,7 @@ func secret(ctx *pulumi.Context, cfg *config.Config, name, value string, sa *ser
 	// old one). DELETE destroys the old version: disabled versions are still billed.
 	version, err := secretmanager.NewSecretVersion(ctx, name, &secretmanager.SecretVersionArgs{
 		Secret:         s.ID(),
-		SecretData:     pulumi.ToSecret(pulumi.String(value)).(pulumi.StringOutput),
+		SecretData:     pulumi.ToSecret(value).(pulumi.StringOutput),
 		DeletionPolicy: pulumi.String("DELETE"),
 	}, opts...)
 	if err != nil {
@@ -195,7 +202,7 @@ func service(ctx *pulumi.Context, cfg *config.Config, sa *serviceaccount.Account
 		Template: &cloudrunv2.ServiceTemplateArgs{
 			ServiceAccount:                sa.Email,
 			MaxInstanceRequestConcurrency: pulumi.Int(s.Concurrency),
-			Timeout:                       pulumi.String(strconv.Itoa(int(s.Timeout.Seconds())) + "s"),
+			Timeout:                       pulumi.String(seconds(s.Timeout)),
 			Scaling: &cloudrunv2.ServiceTemplateScalingArgs{
 				MinInstanceCount: pulumi.Int(s.MinInstances),
 				MaxInstanceCount: pulumi.Int(s.MaxInstances),
@@ -236,7 +243,7 @@ func ServerEnv(cfg *config.Config) map[string]string {
 		p + "_HTTP_BASE_PATH":  a.BasePath,
 		p + "_LOG_LEVEL":       a.LogLevel,
 		p + "_LOG_FORMAT":      "json",
-		p + "_HTTP_REQUEST_TIMEOUT": a.RequestTimeout.String(),
+		p + "_HTTP_REQUEST_TIMEOUT": a.RequestTimeout,
 {%- if cookiecutter.use_postgres == 'y' %}
 		p + "_DB_HOST":                   a.DB.Host,
 		p + "_DB_PORT":                   strconv.Itoa(a.DB.Port),
@@ -246,10 +253,10 @@ func ServerEnv(cfg *config.Config) map[string]string {
 		p + "_DB_AUTO_MIGRATE":           strconv.FormatBool(a.DB.AutoMigrate),
 		p + "_DB_POOL_MAX_CONNS":         strconv.Itoa(a.DB.Pool.MaxConns),
 		p + "_DB_POOL_MIN_CONNS":         strconv.Itoa(a.DB.Pool.MinConns),
-		p + "_DB_POOL_MAX_CONN_LIFETIME":  a.DB.Pool.MaxConnLifetime.String(),
-		p + "_DB_POOL_MAX_CONN_IDLE_TIME": a.DB.Pool.MaxConnIdleTime.String(),
-		p + "_DB_TIMEOUTS_CONNECT":       a.DB.Timeouts.Connect.String(),
-		p + "_DB_TIMEOUTS_QUERY":         a.DB.Timeouts.Query.String(),
+		p + "_DB_POOL_MAX_CONN_LIFETIME":  a.DB.Pool.MaxConnLifetime,
+		p + "_DB_POOL_MAX_CONN_IDLE_TIME": a.DB.Pool.MaxConnIdleTime,
+		p + "_DB_TIMEOUTS_CONNECT":       a.DB.Timeouts.Connect,
+		p + "_DB_TIMEOUTS_QUERY":         a.DB.Timeouts.Query,
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
 		p + "_REDIS_POOL_SIZE": strconv.Itoa(a.RedisPoolSize),
@@ -323,4 +330,10 @@ func invokers(ctx *pulumi.Context, cfg *config.Config, svc *cloudrunv2.Service, 
 	}
 {%- endif %}
 	return nil
+}
+
+// seconds formats a validated Go duration as Cloud Run wants it: "60s".
+func seconds(d string) string {
+	v, _ := time.ParseDuration(d)
+	return strconv.Itoa(int(v.Seconds())) + "s"
 }

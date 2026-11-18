@@ -1,0 +1,41 @@
+# Stack dev: only what differs from config.Default() (internal/config/config.go).
+# Secrets are added encrypted by Pulumi:
+{%- if cookiecutter.use_postgres == 'y' %}
+#   pulumi config set --secret db_password <password>
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+#   pulumi config set --secret redis_url rediss://default:<password>@<host>:6379/0
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+#   pulumi config set --secret auth_public_key -- "$(cat public.pem)"   # app.auth.mode static only
+{%- endif %}
+config:
+  {{ cookiecutter.project_slug }}:project: {{ cookiecutter.gcp_project }}
+  {{ cookiecutter.project_slug }}:region: {{ cookiecutter.gcp_region }}
+  {{ cookiecutter.project_slug }}:service:
+    name: {{ cookiecutter.project_slug }}-dev
+    max_instances: 2
+    deletion_protection: false
+  {{ cookiecutter.project_slug }}:app:
+    log_level: debug
+{%- if cookiecutter.use_postgres == 'y' %}
+    db:
+      host: 10.0.0.3 # CHANGE ME
+      user: {{ cookiecutter.project_slug }}
+      name: {{ cookiecutter.project_slug }}_dev
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+    # Firebase; ZITADEL: issuer https://<instance>.zitadel.cloud, audiences [<project id>],
+    # jwks_url https://<instance>.zitadel.cloud/oauth/v2/keys, roles_claim urn:zitadel:iam:org:project:roles
+    auth:
+      issuer: https://securetoken.google.com/{{ cookiecutter.gcp_project }} # CHANGE ME
+      audiences: [{{ cookiecutter.gcp_project }}] # CHANGE ME
+      jwks_url: https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com
+{%- endif %}
+  {{ cookiecutter.project_slug }}:access:
+    # roles/run.invoker; Cloud Run rejects every other caller.
+    callers:
+      - gateway@{{ cookiecutter.gcp_project }}.iam.gserviceaccount.com # CHANGE ME
+{%- if cookiecutter.use_auth == 'y' %}
+    public: false # true: allUsers, the Bearer JWT is the only gate
+{%- endif %}

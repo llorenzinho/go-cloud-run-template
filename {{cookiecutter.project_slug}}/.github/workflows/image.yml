@@ -78,7 +78,7 @@ jobs:
           {
             echo "### Image pushed"
             echo
-            echo "Deploy it with \`task deploy:up STACK=<stack>\` (image.tag in deploy/config/default.yaml is bumped by release-please):"
+            echo "Deploy it with \`task deploy:up STACK=<stack>\` (the image tag in deploy/internal/config/config.go is bumped by release-please):"
             echo
             echo '```'
             echo "${IMAGE_BASE}:${TAG}"

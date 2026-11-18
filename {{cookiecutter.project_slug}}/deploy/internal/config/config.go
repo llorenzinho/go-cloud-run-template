@@ -1,62 +1,48 @@
-// Package config loads the deploy configuration of a stack:
+// Package config reads the stack configuration from Pulumi config
+// (Pulumi.<stack>.yaml, `pulumi config set [--secret] <key> <value>`).
 //
-//	<dir>/default.yaml          shared defaults (committed)
-//	<dir>/<stack>/config.yaml   per-environment overlay (committed)
-//	<dir>/<stack>/secret.yaml   secrets (never committed)
-//
-// Every key can be overridden by an environment variable: DEPLOY_<KEY> for
-// the config and DEPLOY_SECRET_<KEY> for secrets, with dots replaced by
-// underscores (service.max_instances -> DEPLOY_SERVICE_MAX_INSTANCES).
+// Objects (image, service, app, access) are merged over Default(): a stack
+// sets only what differs. Secrets are Pulumi secrets: encrypted in the stack
+// file, never in plain text in the program.
 package config
 
 import (
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/go-playground/validator/v10"
-	"github.com/spf13/viper"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	pconfig "github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
-// Env var prefixes.
-const (
-	EnvPrefix       = "DEPLOY"
-	SecretEnvPrefix = "DEPLOY_SECRET"
-	// EnvPrefixApp is the env prefix of the server configuration.
-	EnvPrefixApp = "{{ cookiecutter.env_prefix }}"
-)
+// EnvPrefixApp is the env prefix of the server configuration.
+const EnvPrefixApp = "{{ cookiecutter.env_prefix }}"
 
-// Config is the deploy configuration of one stack (environment).
+// Config is the deploy configuration of one stack.
 type Config struct {
-	// Stack must match the Pulumi stack: a guard against deploying the wrong overlay.
-	Stack   string `mapstructure:"stack" validate:"required"`
-	Project string `mapstructure:"project" validate:"required"`
-	Region  string `mapstructure:"region" validate:"required"`
+	// Stack is the Pulumi stack name; it becomes the server env.
+	Stack   string `json:"-"`
+	Project string `json:"-"`
+	Region  string `json:"-"`
 	// EnableAPIs enables the Google APIs the stack needs.
-	EnableAPIs bool              `mapstructure:"enable_apis"`
-	Labels     map[string]string `mapstructure:"labels" validate:"dive,keys,label,endkeys,max=63"`
-	Image      ImageConfig       `mapstructure:"image"`
-	Service    ServiceConfig     `mapstructure:"service"`
-	App        AppConfig         `mapstructure:"app"`
-	Access     AccessConfig      `mapstructure:"access"`
+	EnableAPIs bool              `json:"enable_apis"`
+	Labels     map[string]string `json:"labels"`
+	Image      ImageConfig       `json:"image"`
+	Service    ServiceConfig     `json:"service"`
+	App        AppConfig         `json:"app"`
+	Access     AccessConfig      `json:"access"`
 }
 
 // ImageConfig is the container image to run.
 type ImageConfig struct {
-	// Repository is the image without tag, e.g. <region>-docker.pkg.dev/<project>/<repo>/{{ cookiecutter.project_slug }}.
-	Repository string `mapstructure:"repository" validate:"required,imagerepo"`
-	// Tag is the release (v0.0.1, bumped by release-please in default.yaml) or
-	// a digest (sha256:…). A mutable tag such as latest hides image changes
-	// from Pulumi.
-	Tag string `mapstructure:"tag" validate:"required,excludes=@"`
+	// Repository is the image without tag.
+	Repository string `json:"repository"`
+	// Tag is the release (bumped by release-please in Default) or a digest
+	// (sha256:…). A mutable tag such as latest hides image changes from Pulumi.
+	Tag string `json:"tag"`
 }
 
 // Ref returns the full image reference: <repository>:<tag> or <repository>@sha256:….
@@ -67,127 +53,105 @@ func (i ImageConfig) Ref() string {
 	return i.Repository + ":" + i.Tag
 }
 
-{%- if cookiecutter.use_auth == 'y' %}
-// ServiceConfig configures the Cloud Run service. Invokers are the service
-// accounts in access.callers, plus allUsers with access.public.
-{%- else %}
-// ServiceConfig configures the Cloud Run service. It is never public: there is
-// no setting for it, invokers are the service accounts in access.callers.
-{%- endif %}
+// ServiceConfig configures the Cloud Run service.
 type ServiceConfig struct {
 	// Name of the service; also prefix of the runtime service account
 	// (<name>-run, max 30 chars) and of the secrets.
-	Name         string `mapstructure:"name" validate:"required,max=26,runname"`
-	MinInstances int    `mapstructure:"min_instances" validate:"gte=0"` // 0 = scale to zero
-	MaxInstances int    `mapstructure:"max_instances" validate:"gte=1,gtefield=MinInstances"`
-	CPU          string `mapstructure:"cpu" validate:"oneof=1 2 4 8"`
-	Memory       string `mapstructure:"memory" validate:"required,memory"`
+	Name         string `json:"name"`
+	MinInstances int    `json:"min_instances"` // 0 = scale to zero
+	MaxInstances int    `json:"max_instances"`
+	CPU          string `json:"cpu"`
+	Memory       string `json:"memory"`
 	// CPUIdle allocates CPU only while serving requests (cheaper, allows <512Mi).
-	CPUIdle            bool          `mapstructure:"cpu_idle"`
-	StartupCPUBoost    bool          `mapstructure:"startup_cpu_boost"`
-	Concurrency        int           `mapstructure:"concurrency" validate:"gte=1,lte=1000"`
-	Timeout            time.Duration `mapstructure:"timeout" validate:"gte=1s,lte=60m"`
-	Ingress            string        `mapstructure:"ingress" validate:"oneof=all internal internal-and-cloud-load-balancing"`
-	DeletionProtection bool          `mapstructure:"deletion_protection"`
-	// Env adds environment variables to the server (e.g. {{ cookiecutter.env_prefix }}_LOG_LEVEL is
-	// in app; this is for anything else). Managed variables cannot be set here.
-	Env map[string]string `mapstructure:"env" validate:"dive,keys,envname,endkeys"`
+	CPUIdle         bool   `json:"cpu_idle"`
+	StartupCPUBoost bool   `json:"startup_cpu_boost"`
+	Concurrency     int    `json:"concurrency"`
+	Timeout         string `json:"timeout"` // Go duration, e.g. 60s
+	// Ingress: all | internal | internal-and-cloud-load-balancing.
+	Ingress            string `json:"ingress"`
+	DeletionProtection bool   `json:"deletion_protection"`
+	// Env adds server env vars; the managed ones (ManagedEnv) are rejected.
+	Env map[string]string `json:"env"`
 }
 
 // AppConfig is the server configuration, passed as {{ cookiecutter.env_prefix }}_* env vars.
 type AppConfig struct {
-	BasePath string `mapstructure:"base_path" validate:"omitempty,startswith=/,endsnotwith=/"`
-	LogLevel string `mapstructure:"log_level" validate:"oneof=debug info warn error"`
-	// RequestTimeout is the deadline of each request context; keep it below service.timeout.
-	RequestTimeout time.Duration `mapstructure:"request_timeout" validate:"gte=0"`
-	TrustedProxies []string      `mapstructure:"trusted_proxies" validate:"dive,cidr|ip"`
+	BasePath string `json:"base_path"`
+	LogLevel string `json:"log_level"`
+	// RequestTimeout is the deadline of each request; keep it below service.timeout.
+	RequestTimeout string   `json:"request_timeout"`
+	TrustedProxies []string `json:"trusted_proxies"`
 {%- if cookiecutter.use_postgres == 'y' %}
-	DB DBConfig `mapstructure:"db"`
+	DB DBConfig `json:"db"`
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
-	RedisPoolSize int `mapstructure:"redis_pool_size" validate:"gte=0"`
+	RedisPoolSize int `json:"redis_pool_size"`
 {%- endif %}
 {%- if cookiecutter.use_auth == 'y' %}
-	Auth AuthConfig `mapstructure:"auth"`
+	Auth AuthConfig `json:"auth"`
 {%- endif %}
 }
+{%- if cookiecutter.use_postgres == 'y' %}
+
+// DBConfig is the database of the stack. The password is the secret db_password.
+type DBConfig struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	User    string `json:"user"`
+	Name    string `json:"name"`
+	SSLMode string `json:"sslmode"`
+	// AutoMigrate applies the migrations at startup; false: task migrate:up ENV=<stack>.
+	AutoMigrate bool `json:"auto_migrate"`
+	Pool        struct {
+		// max_instances x max_conns is the worst case number of connections.
+		MaxConns        int    `json:"max_conns"`
+		MinConns        int    `json:"min_conns"`
+		MaxConnLifetime string `json:"max_conn_lifetime"`
+		MaxConnIdleTime string `json:"max_conn_idle_time"`
+	} `json:"pool"`
+	Timeouts struct {
+		Connect string `json:"connect"`
+		Query   string `json:"query"`
+	} `json:"timeouts"`
+}
+{%- endif %}
 {%- if cookiecutter.use_auth == 'y' %}
 
 // AuthConfig is the Bearer JWT verification of the API. In static mode the
-// public key is the secret auth_public_key (Secret Manager <service>-auth-public-key).
+// public key is the secret auth_public_key.
 type AuthConfig struct {
-	Mode       string   `mapstructure:"mode" validate:"oneof=jwks static"`
-	Issuer     string   `mapstructure:"issuer" validate:"required"`
-	Audiences  []string `mapstructure:"audiences" validate:"min=1,dive,required"`
-	Algorithms []string `mapstructure:"algorithms" validate:"min=1,dive,oneof=RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA"`
-	// JWKSURL is required with mode jwks.
-	JWKSURL    string   `mapstructure:"jwks_url" validate:"required_if=Mode jwks,omitempty,url"`
-	RolesClaim string   `mapstructure:"roles_claim"`
-	TokenTypes []string `mapstructure:"token_types" validate:"dive,required"`
-}
-{%- endif %}
-{%- if cookiecutter.use_postgres == 'y' %}
-
-// DBConfig is the database of the stack. The password is a secret (db_password).
-type DBConfig struct {
-	Host    string `mapstructure:"host" validate:"required"`
-	Port    int    `mapstructure:"port" validate:"gte=1,lte=65535"`
-	User    string `mapstructure:"user" validate:"required"`
-	Name    string `mapstructure:"name" validate:"required"`
-	SSLMode string `mapstructure:"sslmode" validate:"oneof=disable allow prefer require verify-ca verify-full"`
-	// AutoMigrate applies the migrations at startup (advisory lock); false: task migrate:up ENV=<stack>.
-	AutoMigrate bool            `mapstructure:"auto_migrate"`
-	Pool        DBPoolConfig    `mapstructure:"pool"`
-	Timeouts    DBTimeoutConfig `mapstructure:"timeouts"`
-}
-
-// DBPoolConfig sizes the pgx pool of each instance: max_instances x max_conns
-// is the worst case number of connections.
-type DBPoolConfig struct {
-	MaxConns        int           `mapstructure:"max_conns" validate:"gte=1"`
-	MinConns        int           `mapstructure:"min_conns" validate:"gte=0,ltefield=MaxConns"`
-	MaxConnLifetime time.Duration `mapstructure:"max_conn_lifetime" validate:"gte=0"`
-	MaxConnIdleTime time.Duration `mapstructure:"max_conn_idle_time" validate:"gte=0"`
-}
-
-// DBTimeoutConfig bounds connections and queries (0 = none).
-type DBTimeoutConfig struct {
-	Connect time.Duration `mapstructure:"connect" validate:"gte=0"`
-	Query   time.Duration `mapstructure:"query" validate:"gte=0"`
+	Mode       string   `json:"mode"` // jwks | static
+	Issuer     string   `json:"issuer"`
+	Audiences  []string `json:"audiences"`
+	Algorithms []string `json:"algorithms"`
+	JWKSURL    string   `json:"jwks_url"`
+	RolesClaim string   `json:"roles_claim"`
+	TokenTypes []string `json:"token_types"`
 }
 {%- endif %}
 
+// AccessConfig lists who may call the service.
+type AccessConfig struct {
+	// Callers are service accounts (gateway, other services): they get
+	// roles/run.invoker. Cloud Run authenticates every request against them.
+	Callers []string `json:"callers"`
 {%- if cookiecutter.use_auth == 'y' %}
-// AccessConfig lists who may call the service.
-type AccessConfig struct {
-	// Callers are service accounts (gateway, other services): they get
-	// roles/run.invoker. Cloud Run authenticates every request against them.
-	// At least one unless Public.
-	Callers []string `mapstructure:"callers" validate:"unique,dive,serviceaccount"`
-	// Public grants roles/run.invoker to allUsers: anyone reaches the
-	// container and the Bearer JWT (app.auth) is the only gate.
-	Public bool `mapstructure:"public"`
-}
-{%- else %}
-// AccessConfig lists who may call the service.
-type AccessConfig struct {
-	// Callers are service accounts (gateway, other services): they get
-	// roles/run.invoker. Cloud Run authenticates every request against them.
-	Callers []string `mapstructure:"callers" validate:"min=1,unique,dive,serviceaccount"`
-}
+	// Public grants roles/run.invoker to allUsers: the Bearer JWT is the only gate.
+	Public bool `json:"public"`
 {%- endif %}
+}
 
-// Secrets are the values read from secret.yaml / DEPLOY_SECRET_*.
+// Secrets are Pulumi secrets of the stack.
 type Secrets struct {
 {%- if cookiecutter.use_postgres == 'y' %}
-	DBPassword string `mapstructure:"db_password" validate:"required"`
+	DBPassword pulumi.StringOutput
 {%- endif %}
 {%- if cookiecutter.use_redis == 'y' %}
-	RedisURL string `mapstructure:"redis_url" validate:"required,redisurl"`
+	RedisURL pulumi.StringOutput
 {%- endif %}
 {%- if cookiecutter.use_auth == 'y' %}
-	// AuthPublicKey is the PEM public key of app.auth mode static (required then).
-	AuthPublicKey string `mapstructure:"auth_public_key"`
+	// AuthPublicKey is set only with app.auth.mode static.
+	AuthPublicKey pulumi.StringOutput
 {%- endif %}
 }
 
@@ -230,87 +194,150 @@ var ManagedEnv = []string{
 	"{{ cookiecutter.env_prefix }}_AUTH_TOKEN_TYPES",
 	"{{ cookiecutter.env_prefix }}_AUTH_JWKS_URL",
 	"{{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY",
-	"{{ cookiecutter.env_prefix }}_AUTH_STATIC_PUBLIC_KEY_FILE",
 {%- endif %}
 }
 
-// DefaultDir is the configuration directory, relative to the Pulumi project.
-const DefaultDir = "config"
-
-// Load reads and validates the configuration and secrets of stack from dir.
-func Load(dir, stack string) (*Config, *Secrets, error) {
-	cfg, err := LoadConfig(dir, stack)
-	if err != nil {
-		return nil, nil, err
+// Default returns the values shared by every stack.
+func Default() Config {
+	c := Config{
+		EnableAPIs: true,
+		Image: ImageConfig{
+			Repository: "{{ cookiecutter.gcp_region }}-docker.pkg.dev/{{ cookiecutter.gcp_project }}/{{ cookiecutter.ar_repository }}/{{ cookiecutter.project_slug }}",
+			Tag:        "v0.0.0", // x-release-please-version
+		},
+		Service: ServiceConfig{
+			Name:               "{{ cookiecutter.project_slug }}",
+			MaxInstances:       5,
+			CPU:                "1",
+			Memory:             "256Mi",
+			CPUIdle:            true,
+			StartupCPUBoost:    true,
+			Concurrency:        80,
+			Timeout:            "60s",
+			Ingress:            "all",
+			DeletionProtection: true,
+		},
+		App: AppConfig{
+			BasePath:       "{{ cookiecutter.base_path }}",
+			LogLevel:       "info",
+			RequestTimeout: "30s",
+{%- if cookiecutter.use_auth == 'y' %}
+			Auth: AuthConfig{
+				Mode:       "jwks",
+				Algorithms: []string{"RS256"},
+				RolesClaim: "roles",
+			},
+{%- endif %}
+		},
 	}
-	sec, err := LoadSecrets(dir, stack)
-	if err != nil {
-		return nil, nil, err
+{%- if cookiecutter.use_postgres == 'y' %}
+	c.App.DB.Port = 5432
+	c.App.DB.SSLMode = "require"
+	c.App.DB.AutoMigrate = true
+	c.App.DB.Pool.MaxConns = 5
+	c.App.DB.Pool.MaxConnLifetime = "30m"
+	c.App.DB.Pool.MaxConnIdleTime = "5m"
+	c.App.DB.Timeouts.Connect = "5s"
+	c.App.DB.Timeouts.Query = "10s"
+{%- endif %}
+	return c
+}
+
+// Load reads the stack configuration over Default and validates it.
+func Load(ctx *pulumi.Context) (*Config, *Secrets, error) {
+	pc := pconfig.New(ctx, "")
+	cfg := Default()
+	cfg.Stack = ctx.Stack()
+	cfg.Project = pc.Get("project")
+	cfg.Region = pc.Get("region")
+	for key, out := range map[string]any{
+		"enable_apis": &cfg.EnableAPIs, "labels": &cfg.Labels, "image": &cfg.Image,
+		"service": &cfg.Service, "app": &cfg.App, "access": &cfg.Access,
+	} {
+		if err := pc.GetObject(key, out); err != nil {
+			return nil, nil, fmt.Errorf("config %s: %w", key, err)
+		}
+	}
+
+	var errs []error
+{%- if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' or cookiecutter.use_auth == 'y' %}
+	secret := func(key string, required bool) pulumi.StringOutput {
+		if required && pc.Get(key) == "" {
+			errs = append(errs, fmt.Errorf("%s: is required: pulumi config set --secret %s <value>", key, key))
+		}
+		return pc.GetSecret(key)
+	}
+{%- endif %}
+	sec := &Secrets{
+{%- if cookiecutter.use_postgres == 'y' %}
+		DBPassword: secret("db_password", true),
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+		RedisURL: secret("redis_url", true),
+{%- endif %}
+{%- if cookiecutter.use_auth == 'y' %}
+		AuthPublicKey: secret("auth_public_key", cfg.App.Auth.Mode == "static"),
+{%- endif %}
+	}
+	if err := errors.Join(append(errs, cfg.validate())...); err != nil {
+		return nil, nil, fmt.Errorf("stack %s: %w", cfg.Stack, err)
+	}
+	return &cfg, sec, nil
+}
+
+var (
+	runNameRe = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
+	// A Google service account: <id>@<project>.iam.gserviceaccount.com and the
+	// Google-managed variants. allUsers / allAuthenticatedUsers never match.
+	serviceAccountRe = regexp.MustCompile(`^[a-z0-9-]+@[a-z0-9-]+(\.iam)?\.gserviceaccount\.com$`)
+)
+
+// validate keeps the checks that protect something; the Cloud Run API
+// rejects the other invalid values at preview.
+func (c *Config) validate() error {
+	var errs []error
+	fail := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	if c.Project == "" || c.Region == "" {
+		fail("project and region are required: pulumi config set project <id>; pulumi config set region <region>")
+	}
+	if len(c.Service.Name) > 26 || !runNameRe.MatchString(c.Service.Name) {
+		fail("service.name %q: lowercase letters, digits and '-', max 26 chars", c.Service.Name)
+	}
+	for _, d := range []struct{ key, v string }{
+		{"service.timeout", c.Service.Timeout}, {"app.request_timeout", c.App.RequestTimeout},
+	} {
+		if _, err := time.ParseDuration(d.v); err != nil {
+			fail("%s: %w", d.key, err)
+		}
+	}
+	for _, sa := range c.Access.Callers {
+		if !serviceAccountRe.MatchString(sa) {
+			fail("access.callers: %q is not a service account (public principals are not allowed)", sa)
+		}
 	}
 {%- if cookiecutter.use_auth == 'y' %}
-	if cfg.App.Auth.Mode == "static" && sec.AuthPublicKey == "" {
-		return nil, nil, errors.New("secrets: auth_public_key: is required with app.auth.mode static")
+	if len(c.Access.Callers) == 0 && !c.Access.Public {
+		fail("access.callers: at least one service account (or access.public: true)")
+	}
+	if a := c.App.Auth; a.Mode != "jwks" && a.Mode != "static" {
+		fail("app.auth.mode: must be jwks or static")
+	} else if a.Mode == "jwks" && a.JWKSURL == "" {
+		fail("app.auth.jwks_url: is required with mode jwks")
+	}
+	if c.App.Auth.Issuer == "" || len(c.App.Auth.Audiences) == 0 {
+		fail("app.auth.issuer and app.auth.audiences are required")
+	}
+{%- else %}
+	if len(c.Access.Callers) == 0 {
+		fail("access.callers: at least one service account")
 	}
 {%- endif %}
-	return cfg, sec, nil
-}
-
-// LoadConfig merges default.yaml and <stack>/config.yaml, applies DEPLOY_*
-// env overrides and validates the result. Unknown keys are errors.
-func LoadConfig(dir, stack string) (*Config, error) {
-	v := newViper(EnvPrefix)
-	v.SetConfigFile(filepath.Join(dir, "default.yaml"))
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("read defaults: %w", err)
+	for k := range c.Service.Env {
+		if slices.Contains(ManagedEnv, k) {
+			fail("service.env: %s is set by the deploy", k)
+		}
 	}
-	v.SetConfigFile(filepath.Join(dir, stack, "config.yaml"))
-	if err := v.MergeInConfig(); err != nil {
-		return nil, fmt.Errorf("read stack %q config: %w", stack, err)
-	}
-	if err := bindEnvs(v, reflect.TypeFor[Config](), ""); err != nil {
-		return nil, err
-	}
-
-	var cfg Config
-	if err := v.UnmarshalExact(&cfg); err != nil {
-		return nil, fmt.Errorf("decode config: %w", err)
-	}
-	// viper lowercases map keys: env var names are upper case.
-	env := make(map[string]string, len(cfg.Service.Env))
-	for k, val := range cfg.Service.Env {
-		env[strings.ToUpper(k)] = val
-	}
-	cfg.Service.Env = env
-	if err := check(&cfg); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	if cfg.Stack != stack {
-		return nil, fmt.Errorf("config: stack is %q in the files, but the selected stack is %q", cfg.Stack, stack)
-	}
-	return &cfg, nil
-}
-
-// LoadSecrets reads <stack>/secret.yaml (optional when every secret comes
-// from DEPLOY_SECRET_* env vars) and validates it. Errors never include values.
-func LoadSecrets(dir, stack string) (*Secrets, error) {
-	v := newViper(SecretEnvPrefix)
-	v.SetConfigFile(filepath.Join(dir, stack, "secret.yaml"))
-	if err := v.ReadInConfig(); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("read stack %q secrets: %w", stack, err)
-	}
-	if err := bindEnvs(v, reflect.TypeFor[Secrets](), ""); err != nil {
-		return nil, err
-	}
-
-	var sec Secrets
-	if err := v.UnmarshalExact(&sec); err != nil {
-		// mapstructure errors may quote values: report the keys only.
-		return nil, errors.New("decode secrets: invalid or unknown keys (expected: {{ ([] + (['db_password'] if cookiecutter.use_postgres == 'y' else []) + (['redis_url'] if cookiecutter.use_redis == 'y' else []) + (['auth_public_key'] if cookiecutter.use_auth == 'y' else [])) | join(', ') }})")
-	}
-	if err := check(&sec); err != nil {
-		return nil, fmt.Errorf("secrets: %w", err)
-	}
-	return &sec, nil
+	return errors.Join(errs...)
 }
 
 // Warnings returns non-fatal configuration issues.
@@ -319,8 +346,10 @@ func (c *Config) Warnings() []string {
 	if c.Image.Tag == "latest" {
 		w = append(w, fmt.Sprintf("image %q uses a mutable tag: Pulumi cannot detect changes behind it", c.Image.Ref()))
 	}
-	if c.App.RequestTimeout == 0 || c.App.RequestTimeout >= c.Service.Timeout {
-		w = append(w, fmt.Sprintf("app.request_timeout (%s) should be below service.timeout (%s): Cloud Run cuts the request first", c.App.RequestTimeout, c.Service.Timeout))
+	req, _ := time.ParseDuration(c.App.RequestTimeout) // validated
+	svc, _ := time.ParseDuration(c.Service.Timeout)
+	if req == 0 || req >= svc {
+		w = append(w, fmt.Sprintf("app.request_timeout (%s) should be below service.timeout (%s): Cloud Run cuts the request first", req, svc))
 	}
 {%- if cookiecutter.use_auth == 'y' %}
 	if c.Access.Public {
@@ -333,209 +362,4 @@ func (c *Config) Warnings() []string {
 	}
 {%- endif %}
 	return w
-}
-
-func newViper(prefix string) *viper.Viper {
-	v := viper.New()
-	v.SetConfigType("yaml")
-	v.SetEnvPrefix(prefix)
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AllowEmptyEnv(true)
-	v.AutomaticEnv()
-	return v
-}
-
-// bindEnvs binds the env var of every leaf key derived from mapstructure tags,
-// so env vars work for keys missing from the files. Maps and lists of structs
-// cannot be expressed as a single env var and are file-only.
-func bindEnvs(v *viper.Viper, t reflect.Type, prefix string) error {
-	for f := range t.Fields() {
-		name, _, _ := strings.Cut(f.Tag.Get("mapstructure"), ",")
-		if name == "" || name == "-" {
-			continue
-		}
-		key := name
-		if prefix != "" {
-			key = prefix + "." + name
-		}
-		switch {
-		case f.Type.Kind() == reflect.Struct:
-			if err := bindEnvs(v, f.Type, key); err != nil {
-				return err
-			}
-			continue
-		case f.Type.Kind() == reflect.Map,
-			f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Struct:
-			continue
-		}
-		if err := v.BindEnv(key); err != nil {
-			return fmt.Errorf("bind env %s: %w", key, err)
-		}
-	}
-	return nil
-}
-
-var (
-	runNameRe    = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
-	memoryRe     = regexp.MustCompile(`^([1-9][0-9]*)(Mi|Gi)$`)
-	envNameRe    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-	labelRe      = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-	// A Google service account: <id>@<project>.iam.gserviceaccount.com and the
-	// Google-managed variants (…@appspot.gserviceaccount.com, …@gcp-sa-….iam.…).
-	serviceAccountRe = regexp.MustCompile(`^[a-z0-9-]+@[a-z0-9-]+(\.iam)?\.gserviceaccount\.com$`)
-)
-
-// validate returns the validator with the custom tags and rules of Config.
-var validate = sync.OnceValue(func() *validator.Validate {
-	v := validator.New(validator.WithRequiredStructEnabled())
-	v.RegisterTagNameFunc(func(f reflect.StructField) string {
-		name, _, _ := strings.Cut(f.Tag.Get("mapstructure"), ",")
-		return name
-	})
-	regex := func(re *regexp.Regexp) validator.Func {
-		return func(fl validator.FieldLevel) bool { return re.MatchString(fl.Field().String()) }
-	}
-	must(v.RegisterValidation("runname", regex(runNameRe)))
-	must(v.RegisterValidation("memory", regex(memoryRe)))
-	must(v.RegisterValidation("envname", regex(envNameRe)))
-	must(v.RegisterValidation("label", regex(labelRe)))
-	must(v.RegisterValidation("serviceaccount", regex(serviceAccountRe)))
-	// Repository without tag or digest (a registry host:port is allowed).
-	must(v.RegisterValidation("imagerepo", func(fl validator.FieldLevel) bool {
-		s := fl.Field().String()
-		return !strings.Contains(s, "@") && !strings.Contains(s[strings.LastIndex(s, "/")+1:], ":")
-	}))
-	must(v.RegisterValidation("redisurl", func(fl validator.FieldLevel) bool {
-		s := fl.Field().String()
-		return strings.HasPrefix(s, "redis://") || strings.HasPrefix(s, "rediss://")
-	}))
-	v.RegisterStructValidation(validateService, ServiceConfig{})
-{%- if cookiecutter.use_auth == 'y' %}
-	v.RegisterStructValidation(validateAccess, AccessConfig{})
-{%- endif %}
-	return v
-})
-
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-// validateService enforces the Cloud Run limits between cpu, memory and CPU
-// allocation, and keeps managed env vars out of service.env.
-func validateService(sl validator.StructLevel) {
-	s := sl.Current().Interface().(ServiceConfig)
-	mib := memoryMiB(s.Memory)
-	minMiB := map[string]int{"1": 128, "2": 128, "4": 2048, "8": 4096}[s.CPU]
-	if !s.CPUIdle {
-		minMiB = max(minMiB, 512) // CPU always allocated
-	}
-	if mib > 0 && mib < minMiB {
-		sl.ReportError(s.Memory, "memory", "Memory", "min_memory", fmt.Sprintf("%dMi", minMiB))
-	}
-	for k := range s.Env {
-		if slices.Contains(ManagedEnv, k) {
-			sl.ReportError(s.Env, "env", "Env", "managed_env", k)
-		}
-	}
-}
-
-{%- if cookiecutter.use_auth == 'y' %}
-
-// validateAccess requires a caller unless the service is public.
-func validateAccess(sl validator.StructLevel) {
-	a := sl.Current().Interface().(AccessConfig)
-	if !a.Public && len(a.Callers) == 0 {
-		sl.ReportError(a.Callers, "callers", "Callers", "min", "1")
-	}
-}
-{%- endif %}
-
-// memoryMiB parses "512Mi" / "1Gi"; 0 when invalid (reported by the memory tag).
-func memoryMiB(s string) int {
-	m := memoryRe.FindStringSubmatch(s)
-	if m == nil {
-		return 0
-	}
-	var n int
-	_, _ = fmt.Sscan(m[1], &n)
-	if m[2] == "Gi" {
-		n *= 1024
-	}
-	return n
-}
-
-// check validates s and formats the errors as "field: rule" without values.
-func check(s any) error {
-	err := validate().Struct(s)
-	var verrs validator.ValidationErrors
-	if !errors.As(err, &verrs) {
-		return err
-	}
-	msgs := make([]string, 0, len(verrs))
-	for _, fe := range verrs {
-		msgs = append(msgs, fmt.Sprintf("%s: %s", fieldPath(fe.Namespace()), message(fe)))
-	}
-	return errors.New(strings.Join(msgs, "; "))
-}
-
-// fieldPath drops the root struct name: Config.service.memory -> service.memory.
-func fieldPath(ns string) string {
-	_, rest, ok := strings.Cut(ns, ".")
-	if !ok {
-		return ns
-	}
-	return rest
-}
-
-func message(fe validator.FieldError) string {
-	switch fe.Tag() {
-	case "required", "required_if":
-		return "is required"
-	case "oneof":
-		return "must be one of: " + fe.Param()
-	case "min", "max", "gte", "lte", "gt":
-		return fmt.Sprintf("must be %s %s", fe.Tag(), fe.Param())
-	case "ltefield":
-		return "must be <= " + fe.Param()
-	case "gtefield":
-		return "must be >= " + fe.Param()
-	case "unique":
-		return "must not contain duplicates"
-	case "serviceaccount":
-		return "must be a service account email (…@….iam.gserviceaccount.com); public principals are not allowed"
-	case "runname":
-		return "must be lowercase letters, digits and dashes, starting with a letter"
-	case "memory":
-		return `must be like "512Mi" or "1Gi"`
-	case "min_memory":
-		return "must be at least " + fe.Param() + " for this cpu / cpu_idle"
-	case "envname":
-		return "keys must be env var names (A-Z, 0-9, _)"
-	case "managed_env":
-		return fe.Param() + " is set by the deploy and cannot be overridden"
-	case "label":
-		return "keys must be GCP label keys (lowercase, start with a letter)"
-	case "imagerepo":
-		return "must be an image without tag or digest (set image.tag)"
-	case "excludes":
-		return "must not contain " + fe.Param()
-	case "redisurl":
-		return "must be a redis:// or rediss:// URL"
-	case "cidr|ip":
-		return "must be an IP or CIDR"
-	case "url":
-		return "must be a URL"
-	default:
-		return "failed rule " + fe.Tag()
-	}
-}
-
-// Dir returns the config directory: DEPLOY_CONFIG_DIR or DefaultDir.
-func Dir() string {
-	if d := os.Getenv(EnvPrefix + "_CONFIG_DIR"); d != "" {
-		return d
-	}
-	return DefaultDir
 }
