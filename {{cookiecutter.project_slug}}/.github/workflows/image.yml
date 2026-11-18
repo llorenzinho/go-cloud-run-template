@@ -1,0 +1,87 @@
+# Builds the server image and pushes it to Artifact Registry:
+#   <GCP_REGION>-docker.pkg.dev/<GCP_PROJECT>/<AR_REPOSITORY>/<IMAGE_NAME>:<tag> (+ :latest)
+#
+# Runs for every tag vX.Y.Z, when called by release-please (tags created with
+# GITHUB_TOKEN do not trigger workflows), or manually:
+#   gh workflow run image.yml -f tag=v0.0.1
+#
+# Auth is Workload Identity Federation: repository variables GCP_PROJECT,
+# GCP_REGION, AR_REPOSITORY, IMAGE_NAME, WIF_PROVIDER, WIF_SERVICE_ACCOUNT
+# (set by the cookiecutter post-generation hook).
+name: image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to build (e.g. v0.0.1)
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: image-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      IMAGE_BASE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/${{ vars.AR_REPOSITORY }}/${{ vars.IMAGE_NAME }}
+    steps:
+      - name: Check tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::not a version tag: $TAG"; exit 1; }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: VERSION=${{ env.TAG }}
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ env.TAG }}
+            ${{ env.IMAGE_BASE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image pushed"
+            echo
+            echo "Deploy it with \`task deploy:up STACK=<stack>\` (image.tag in deploy/config/default.yaml is bumped by release-please):"
+            echo
+            echo '```'
+            echo "${IMAGE_BASE}:${TAG}"
+            echo "${IMAGE_BASE}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

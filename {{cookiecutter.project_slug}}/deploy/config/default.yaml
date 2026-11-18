@@ -1,0 +1,58 @@
+# Defaults shared by every stack. <stack>/config.yaml overrides them, and every
+# key can be overridden by DEPLOY_<KEY> (dots -> "_"), e.g.
+#   service.max_instances -> DEPLOY_SERVICE_MAX_INSTANCES
+#   access.callers        -> DEPLOY_ACCESS_CALLERS=a@p.iam.gserviceaccount.com,b@…
+# Maps (labels, service.env) are file-only. Unknown keys are errors.
+
+enable_apis: true
+
+image:
+  repository: {{ cookiecutter.gcp_region }}-docker.pkg.dev/{{ cookiecutter.gcp_project }}/{{ cookiecutter.ar_repository }}/{{ cookiecutter.project_slug }}
+  tag: v0.0.0 # x-release-please-version
+labels: {}
+
+service:
+  name: {{ cookiecutter.project_slug }}
+  min_instances: 0 # scale to zero
+  max_instances: 5
+  cpu: "1"
+  memory: 256Mi
+  cpu_idle: true # CPU only while serving requests; false = always allocated (>= 512Mi)
+  startup_cpu_boost: true
+  concurrency: 80
+  timeout: 60s
+  # all | internal | internal-and-cloud-load-balancing. The service is never
+  # public whatever the ingress: only access.callers have roles/run.invoker.
+  ingress: all
+  deletion_protection: true
+  env: {} # extra server env vars ({{ cookiecutter.env_prefix }}_* managed by the deploy are rejected)
+
+app:
+  base_path: {{ cookiecutter.base_path }}
+  log_level: info
+  request_timeout: 30s # below service.timeout
+  trusted_proxies: []
+{%- if cookiecutter.use_postgres == 'y' %}
+  db:
+    # host, user and name are set per stack; the password is db_password in
+    # <stack>/secret.yaml (Secret Manager <service>-db-password).
+    port: 5432
+    sslmode: require
+    auto_migrate: true # goose at startup, serialized by an advisory lock
+    pool:
+      max_conns: 5 # per instance: max_instances x max_conns connections at most
+      min_conns: 0
+      max_conn_lifetime: 30m
+      max_conn_idle_time: 5m
+    timeouts:
+      connect: 5s
+      query: 10s
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+  redis_pool_size: 0
+{%- endif %}
+
+access:
+  # Service accounts allowed to call the service (roles/run.invoker). Cloud Run
+  # rejects every other request before it reaches the container.
+  callers: []

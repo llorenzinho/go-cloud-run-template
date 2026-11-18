@@ -1,0 +1,38 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries
+    gen:
+      go:
+        package: sqlc
+        out: internal/db/sqlc
+        sql_package: pgx/v5
+        emit_interface: true
+        # Every method takes the DBTX: pass db.DBTX() or the tx of db.InTx.
+        emit_methods_with_db_argument: true
+        emit_empty_slices: true
+        emit_enum_valid_method: true
+        overrides:
+          - db_type: uuid
+            go_type:
+              import: uuid
+              type: UUID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: uuid
+              type: UUID
+              pointer: true
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: text
+            nullable: true
+            go_type:
+              type: string
+              pointer: true

@@ -1,0 +1,50 @@
+{
+  "project_name": "My Service",
+  "project_slug": "{{ cookiecutter.project_name.lower().strip().replace(' ', '-').replace('_', '-') }}",
+  "description": "{{ cookiecutter.project_name }} service on Cloud Run",
+  "github_owner": "",
+  "module_path": "github.com/{{ cookiecutter.github_owner }}/{{ cookiecutter.project_slug }}",
+  "env_prefix": "{{ cookiecutter.project_slug.upper().replace('-', '_') }}",
+  "base_path": "/{{ cookiecutter.project_slug }}",
+  "use_postgres": "y",
+  "db_schema": "{{ cookiecutter.project_slug.replace('-', '_') }}",
+  "include_examples": "y",
+  "use_redis": "n",
+  "gcp_project": "",
+  "gcp_region": "europe-west1",
+  "ar_repository": "",
+  "wif_pool": "",
+  "wif_service_account": "",
+  "go_version": "1.27.3",
+  "repo_visibility": [
+    "private",
+    "public"
+  ],
+  "create_github_repo": "y",
+  "setup_wif": "y",
+  "_copy_without_render": [
+    ".github/workflows/image.yml",
+    ".github/workflows/release-please.yml"
+  ],
+  "__examples": "{{ 'y' if cookiecutter.use_postgres == 'y' and cookiecutter.include_examples == 'y' else 'n' }}",
+  "__prompts__": {
+    "project_name": "Service name (human readable)",
+    "project_slug": "Slug (repo, binary, Cloud Run service name)",
+    "github_owner": "GitHub owner, user or org (required)",
+    "module_path": "Go module path",
+    "env_prefix": "Env var prefix of the service config",
+    "base_path": "HTTP base path of the API (<base_path>/v1)",
+    "use_postgres": "Include Postgres (pgx pool + sqlc + goose migrations) (y/n)",
+    "db_schema": "Postgres schema of the service",
+    "include_examples": "Include the deletable \"items\" example (y/n)",
+    "use_redis": "Include Redis (y/n)",
+    "gcp_project": "GCP project of Artifact Registry and Cloud Run (required)",
+    "gcp_region": "GCP region",
+    "ar_repository": "Artifact Registry Docker repository (required)",
+    "wif_pool": "Workload Identity pool id (required)",
+    "wif_service_account": "Service account impersonated by GitHub Actions (required)",
+    "repo_visibility": "GitHub repository visibility",
+    "create_github_repo": "Create the GitHub repo, set variables and push (y/n)",
+    "setup_wif": "Create the WIF provider github-<slug> for the repo (y/n)"
+  }
+}

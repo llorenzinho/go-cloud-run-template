@@ -1,0 +1,11 @@
+.git
+.env
+bin
+dist
+tmp
+api
+deploy
+.agents
+.claude
+*.md
+.opencode

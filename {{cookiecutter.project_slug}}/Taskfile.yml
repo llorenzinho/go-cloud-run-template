@@ -1,0 +1,260 @@
+version: "3"
+
+# Optional personal overrides (configs/config.yaml holds the configuration).
+dotenv: [".env"]
+
+env:
+  # Tools run through `$X` (mise exec), so the versions pinned in mise.toml are
+  # used even when mise is not activated in the shell.
+  X: mise exec --
+
+vars:
+  NAME: {{ cookiecutter.project_slug }}
+  PREFIX: {{ cookiecutter.env_prefix }}
+{%- if cookiecutter.use_postgres == 'y' %}
+  SCHEMA: {{ cookiecutter.db_schema }}
+{%- endif %}
+{%- raw %}
+  # ENV=<name> loads .env.<name> before running the binary (migrate:*).
+  ENV: ""
+  LOAD_ENV: '{{if .ENV}}set -a && . ./.env.{{.ENV}} && set +a &&{{end}}'
+  BIN: bin/{{.NAME}}
+  # Deploy stack (deploy/config/<STACK>/): task deploy:preview STACK=prod
+  STACK: dev
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    cmds: [task --list]
+
+  setup:
+    desc: Install tools, git hooks and local .env
+    cmds:
+      - mise install
+      - cmd: test -f .env || cp .env.example .env
+        silent: true
+      - task: hooks:install
+
+  hooks:install:
+    desc: Install pre-commit hooks (pre-commit + commit-msg)
+    cmds:
+      - $X pre-commit install --install-hooks -t pre-commit -t commit-msg
+
+  build:
+    desc: Build the server binary
+    sources: ["**/*.go", "go.mod", "go.sum", "db/migrations/*.sql"]
+    generates: ["{{.BIN}}"]
+    cmds:
+      - $X go build -trimpath -ldflags "-X main.version={{.VERSION}}" -o {{.BIN}} ./cmd/{{.NAME}}
+
+  dev:
+    desc: "Run the server in docker compose: hot reload (air) + delve on :2345"
+    cmds:
+      - docker compose --profile dev up --build app
+
+  dev:down:
+    desc: Stop the dev stack
+    cmds:
+      - docker compose --profile dev down
+
+  dev:logs:
+    desc: Tail the dev server logs
+    cmds:
+      - docker compose --profile dev logs -f app
+
+  run:
+    desc: Run the server on the host against compose deps (no hot reload)
+    deps: [compose:up, build]
+    cmds:
+      - ./{{.BIN}}
+
+  fmt:
+    desc: Format code (server + deploy module)
+    cmds:
+      - $X golangci-lint fmt
+      - cd deploy && $X golangci-lint fmt --config {{.ROOT_DIR}}/.golangci.yml
+
+  lint:
+    desc: Run golangci-lint (server + deploy module)
+    cmds:
+      - $X golangci-lint run
+      - cd deploy && $X golangci-lint run --config {{.ROOT_DIR}}/.golangci.yml ./...
+
+  test:
+    desc: Run unit tests (server + deploy module)
+    cmds:
+      - $X gotestsum --format pkgname -- -race -count=1 ./...
+      - task: deploy:test
+
+  test:integration:
+    desc: Run unit + integration tests (needs Docker, uses testcontainers)
+    cmds:
+      - $X gotestsum --format pkgname -- -race -count=1 -tags integration ./...
+
+  tidy:
+    desc: go mod tidy (server + deploy module)
+    cmds:
+      - $X go mod tidy
+      - cd deploy && $X go mod tidy
+
+  cover:
+    desc: Unit + integration coverage report
+    cmds:
+      - $X go test -tags integration -coverprofile=coverage.out ./...
+      - $X go tool cover -func=coverage.out | tail -1
+
+{%- endraw %}
+{%- if cookiecutter.use_postgres == 'y' %}
+
+  # --- database (Postgres + sqlc + goose) -----------------------------------
+{%- raw %}
+
+  db:up:
+    desc: Start the local Postgres (docker compose)
+    cmds:
+      - docker compose up -d --wait postgres
+
+  db:down:
+    desc: Stop the local Postgres (keeps the data)
+    cmds:
+      - docker compose stop postgres
+
+  db:reset:
+    desc: Drop the local Postgres data and start it again
+    prompt: Delete every row of the local database?
+    cmds:
+      - docker compose rm -sfv postgres
+      - docker volume rm -f {{.NAME}}_pgdata
+      - task: db:up
+
+  db:psql:
+    desc: psql shell on the local database (search_path = service schema)
+    interactive: true
+    cmds:
+      - docker compose exec -e PGOPTIONS="-c search_path={{.SCHEMA}}" postgres psql -U {{.NAME}} -d {{.NAME}}
+
+  db:seed:
+    desc: Migrate and load db/seed/*.sql into the local database (idempotent files)
+    vars:
+      SEEDS:
+        sh: ls db/seed/*.sql 2>/dev/null || true
+    cmds:
+      - task: db:up
+      - task: migrate:up
+      - for: { var: SEEDS }
+        cmd: docker compose exec -T -e PGOPTIONS="-c search_path={{.SCHEMA}}" postgres psql -q -v ON_ERROR_STOP=1 -U {{.NAME}} -d {{.NAME}} < {{.ITEM}}
+
+  sqlc:
+    desc: Generate sqlc code (internal/db/sqlc) from db/migrations and db/queries
+    sources: ["db/queries/*.sql", "db/migrations/*.sql", "sqlc.yaml"]
+    generates: ["internal/db/sqlc/*.go"]
+    cmds:
+      - $X sqlc generate
+
+  sqlc:check:
+    desc: Fail if generated sqlc code is stale or queries are invalid
+    cmds:
+      - $X sqlc diff
+      - $X sqlc vet
+
+  # migrate:up|down|status run the service binary, so they use its config,
+  # its schema and its advisory lock. Default target: configs/config.yaml +
+  # .env (local). ENV=<name> also loads .env.<name> (git-ignored, see
+  # .env.prod.example) to reach another database, from a laptop or a CI job:
+  #   task migrate:status ENV=staging
+  migrate:up:
+    desc: "Apply pending migrations: task migrate:up [ENV=staging]"
+    deps: [build]
+    preconditions: &env_file
+      - sh: test -z "{{.ENV}}" || grep -q "^{{.PREFIX}}_DB_HOST=" ".env.{{.ENV}}"
+        msg: ".env.{{.ENV}} must exist and set {{.PREFIX}}_DB_HOST (see .env.prod.example)"
+    cmds:
+      - '{{.LOAD_ENV}} ./{{.BIN}} migrate up'
+
+  migrate:down:
+    desc: "Roll back the last migration: task migrate:down [ENV=staging]"
+    deps: [build]
+    prompt: 'Roll back the last migration on {{.ENV | default "local"}}?'
+    preconditions: *env_file
+    cmds:
+      - '{{.LOAD_ENV}} ./{{.BIN}} migrate down'
+
+  migrate:status:
+    desc: "Show the migration status: task migrate:status [ENV=staging]"
+    deps: [build]
+    preconditions: *env_file
+    cmds:
+      - '{{.LOAD_ENV}} ./{{.BIN}} migrate status'
+
+  migrate:create:
+    desc: "Create a SQL migration: task migrate:create -- add_tags"
+    requires:
+      vars: [CLI_ARGS]
+    cmds:
+      - $X goose -dir db/migrations -s create {{.CLI_ARGS}} sql
+{%- endraw %}
+{%- endif %}
+
+  compose:up:
+    desc: Start the dependencies only
+    cmds:
+{%- if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}
+      - docker compose up -d --wait{% if cookiecutter.use_postgres == 'y' %} postgres{% endif %}{% if cookiecutter.use_redis == 'y' %} redis{% endif %}
+{%- else %}
+      - echo "no dependencies"
+{%- endif %}
+{%- raw %}
+
+  compose:down:
+    desc: Stop every compose service (keeps volumes)
+    cmds:
+      - docker compose --profile dev --profile prod down
+
+  compose:reset:
+    desc: Stop every compose service and drop volumes
+    cmds:
+      - docker compose --profile dev --profile prod down -v
+
+  compose:logs:
+    desc: Tail compose logs
+    cmds:
+      - docker compose logs -f
+
+  docker:build:
+    desc: Build the production image
+    cmds:
+      - docker build --build-arg VERSION={{.VERSION}} -t {{.NAME}}:{{.VERSION}} .
+
+  deploy:check:
+    desc: "Validate a stack's deploy config and secrets without Pulumi: task deploy:check STACK=prod"
+    dir: deploy
+    cmds:
+      - $X go run . -check -stack {{.STACK}}
+
+  deploy:preview:
+    desc: "pulumi preview of a stack: task deploy:preview STACK=prod"
+    dir: deploy
+    deps: [deploy:check]
+    cmds:
+      - $X pulumi preview --stack {{.STACK}} {{.CLI_ARGS}}
+
+  deploy:up:
+    desc: "pulumi up of a stack: task deploy:up STACK=prod"
+    dir: deploy
+    deps: [deploy:check]
+    cmds:
+      - $X pulumi up --stack {{.STACK}} {{.CLI_ARGS}}
+
+  deploy:destroy:
+    desc: "pulumi destroy of a stack"
+    dir: deploy
+    cmds:
+      - $X pulumi destroy --stack {{.STACK}} {{.CLI_ARGS}}
+
+  deploy:test:
+    desc: Run the deploy module tests (config validation, Pulumi mocks)
+    dir: deploy
+    cmds:
+      - $X gotestsum --format pkgname -- -race -count=1 ./...
+{%- endraw %}

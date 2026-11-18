@@ -1,0 +1,106 @@
+name: {{ cookiecutter.project_slug }}
+
+services:
+{%- if cookiecutter.use_postgres == 'y' %}
+  postgres:
+    image: postgres:18.7-alpine # keep in sync with internal/testutil
+    environment:
+      POSTGRES_USER: {{ cookiecutter.project_slug }}
+      POSTGRES_PASSWORD: {{ cookiecutter.project_slug }}
+      POSTGRES_DB: {{ cookiecutter.project_slug }}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ cookiecutter.project_slug }} -d {{ cookiecutter.project_slug }}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+{%- endif %}
+
+  # Development server: hot reload with air + delve on :2345 (`task dev`).
+  app:
+    profiles: [dev]
+    build:
+      context: .
+      target: dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+    environment:
+      # Only what differs from configs/config.yaml when running in the container.
+      {{ cookiecutter.env_prefix }}_HTTP_ADDR: ":8080"
+{%- if cookiecutter.use_postgres == 'y' %}
+      {{ cookiecutter.env_prefix }}_DB_HOST: postgres
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+      {{ cookiecutter.env_prefix }}_REDIS_URL: redis://redis:6379/0
+{%- endif %}
+    ports:
+      - "8080:8080"
+      - "2345:2345"
+    cap_add: [SYS_PTRACE] # delve
+    security_opt: ["seccomp:unconfined"]
+    stop_signal: SIGINT
+{%- if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}
+    depends_on:
+{%- if cookiecutter.use_postgres == 'y' %}
+      postgres:
+        condition: service_healthy
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+      redis:
+        condition: service_healthy
+{%- endif %}
+{%- endif %}
+
+  # Production image smoke test: `docker compose --profile prod up --build`.
+  app-prod:
+    profiles: [prod]
+    build:
+      context: .
+    environment:
+      {{ cookiecutter.env_prefix }}_LOG_FORMAT: json
+{%- if cookiecutter.use_postgres == 'y' %}
+      {{ cookiecutter.env_prefix }}_DB_HOST: postgres
+      {{ cookiecutter.env_prefix }}_DB_PASSWORD: {{ cookiecutter.project_slug }}
+      {{ cookiecutter.env_prefix }}_DB_AUTO_MIGRATE: "true"
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+      {{ cookiecutter.env_prefix }}_REDIS_URL: redis://redis:6379/0
+{%- endif %}
+    ports:
+      - "8080:8080"
+{%- if cookiecutter.use_postgres == 'y' or cookiecutter.use_redis == 'y' %}
+    depends_on:
+{%- if cookiecutter.use_postgres == 'y' %}
+      postgres:
+        condition: service_healthy
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+      redis:
+        condition: service_healthy
+{%- endif %}
+{%- endif %}
+
+volumes:
+{%- if cookiecutter.use_postgres == 'y' %}
+  pgdata:
+{%- endif %}
+  gomod:
+  gocache:

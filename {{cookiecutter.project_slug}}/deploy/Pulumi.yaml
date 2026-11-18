@@ -1,0 +1,5 @@
+name: {{ cookiecutter.project_slug }}
+description: {{ cookiecutter.project_name }} on Cloud Run (private, scale to zero)
+runtime: go
+# Stack configuration is in config/ (default.yaml + <stack>/config.yaml +
+# <stack>/secret.yaml), not in Pulumi.<stack>.yaml.

@@ -1,0 +1,73 @@
+# {{ cookiecutter.project_name }} configuration.
+#
+# This file is the single source of configuration. Every key can be overridden
+# by an environment variable: {{ cookiecutter.env_prefix }}_ + key path in upper case with "." -> "_".
+#   http.trusted_proxies -> {{ cookiecutter.env_prefix }}_HTTP_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.1
+{%- if cookiecutter.use_postgres == 'y' %}
+#   db.password          -> {{ cookiecutter.env_prefix }}_DB_PASSWORD
+#   db.pool.max_conns    -> {{ cookiecutter.env_prefix }}_DB_POOL_MAX_CONNS
+{%- endif %}
+# Use another file with {{ cookiecutter.env_prefix }}_CONFIG=/path/to/config.yaml.
+#
+# Values below target local development (server on the host, `task compose:up`
+# for dependencies). docker-compose.yml and production override what differs.
+
+env: dev # dev enables gin debug mode; anything else = release mode
+
+http:
+  addr: ":8080"
+  # API routes live under <base_path>/v1 so a gateway can forward <base_path>/*
+  # as-is. Empty = root. /healthz and /readyz stay at the root.
+  base_path: {{ cookiecutter.base_path }}
+  read_header_timeout: 10s
+  shutdown_timeout: 15s
+  # Deadline of every request context, propagated to the queries (504 when
+  # exceeded). Keep it below the Cloud Run request timeout. 0 = none.
+  request_timeout: 30s
+  # Peers allowed to set X-Forwarded-For / X-Real-IP (IPs or CIDRs), e.g. the API
+  # gateway / load balancer. Empty = trust none: client_ip in logs is the TCP peer.
+  trusted_proxies: []
+
+log:
+  level: debug # debug|info|warn|error
+  format: text # json|text (the image defaults to json)
+
+health:
+  timeout: 2s # per check on /readyz
+{%- if cookiecutter.use_postgres == 'y' %}
+
+db:
+  host: localhost
+  port: 5432
+  user: {{ cookiecutter.project_slug }}
+  password: {{ cookiecutter.project_slug }} # dev only: set {{ cookiecutter.env_prefix }}_DB_PASSWORD everywhere else
+  name: {{ cookiecutter.project_slug }}
+  sslmode: disable # disable|allow|prefer|require|verify-ca|verify-full
+  # Written in db/migrations: tables and the goose version table live here and it
+  # is the search_path of every connection. Cannot change at runtime.
+  schema: {{ cookiecutter.db_schema }}
+  application_name: {{ cookiecutter.project_slug }}
+  # Apply pending migrations at startup, under a Postgres advisory lock (safe
+  # with several instances starting together). Off: task migrate:up ENV=<env>.
+  auto_migrate: true
+  pool:
+    max_conns: 5
+    min_conns: 0 # keep 0 with Cloud Run scale to zero
+    min_idle_conns: 0
+    max_conn_lifetime: 30m
+    max_conn_lifetime_jitter: 5m
+    max_conn_idle_time: 5m
+    health_check_period: 1m
+  timeouts: # 0 = none
+    connect: 5s # dial of a new connection
+    startup_ping: 5s # connectivity check at startup
+    # Default deadline of a query whose context has none or a later one
+    # (also inside transactions).
+    query: 10s
+{%- endif %}
+{%- if cookiecutter.use_redis == 'y' %}
+
+redis:
+  url: redis://localhost:6379/0
+  pool_size: 0 # 0 = go-redis default (10 per CPU)
+{%- endif %}

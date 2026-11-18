@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "go-cloud-run-template",
+  "description": "Claude Code plugins to scaffold Go services on Cloud Run from go-cloud-run-template.",
+  "owner": {
+    "name": "llorenzinho"
+  },
+  "plugins": [
+    {
+      "name": "go-cloud-run",
+      "source": "./plugins/go-cloud-run",
+      "description": "Skill to scaffold a new Go Cloud Run service (repo, WIF, CI/CD, Pulumi deploy) with cookiecutter."
+    }
+  ]
+}

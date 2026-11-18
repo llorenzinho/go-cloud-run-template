@@ -1,0 +1,14 @@
+[tools]
+go = "{{ cookiecutter.go_version }}"
+task = "3.54"
+{%- if cookiecutter.use_postgres == 'y' %}
+sqlc = "1.31"
+"aqua:pressly/goose" = "3.29"
+{%- endif %}
+golangci-lint = "2.15"
+pre-commit = "4.7"
+gotestsum = "1.13"
+pulumi = "3.272"
+
+[env]
+_.file = ".env"

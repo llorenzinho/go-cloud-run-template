@@ -1,0 +1,22 @@
+# VS Code REST Client / JetBrains HTTP client.
+# Local: task run (no auth). Cloud Run: set @token to
+#   gcloud auth print-identity-token --impersonate-service-account=<caller> --audiences=<url> --include-email
+@base = http://localhost:8080
+@token =
+
+### Liveness
+GET {{ '{{' }}base{{ '}}' }}/healthz
+
+### Readiness
+GET {{ '{{' }}base{{ '}}' }}/readyz
+
+### Create
+POST {{ '{{' }}base{{ '}}' }}{{ cookiecutter.base_path }}/v1/items
+Content-Type: application/json
+Authorization: Bearer {{ '{{' }}token{{ '}}' }}
+
+{"name": "first", "description": "example"}
+
+### List
+GET {{ '{{' }}base{{ '}}' }}{{ cookiecutter.base_path }}/v1/items?limit=20
+Authorization: Bearer {{ '{{' }}token{{ '}}' }}

@@ -1,0 +1,65 @@
+{% raw %}name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Conventional PR titles: release-please builds the changelog from them.
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+{% endraw %}
+{%- if cookiecutter.use_postgres == 'y' %}
+      - run: sqlc diff && sqlc vet
+{%- endif %}
+{% raw %}      - run: go mod tidy -diff
+      - run: golangci-lint run
+      - name: Deploy module
+        working-directory: deploy
+        run: go mod tidy -diff && golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+      - name: Unit + integration tests (testcontainers)
+        run: gotestsum --format pkgname -- -race -count=1 -tags integration -coverprofile=coverage.out ./...
+      - name: Deploy module tests
+        working-directory: deploy
+        run: gotestsum --format pkgname -- -race -count=1 ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+{% endraw %}

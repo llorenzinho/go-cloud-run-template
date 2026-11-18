@@ -1,0 +1,13 @@
+/bin/
+/dist/
+/tmp/
+*.out
+coverage.*
+.env
+.env.*
+!.env*.example
+api/http/.env
+# Deploy secrets (see deploy/config/<stack>/secret.example.yaml).
+deploy/config/*/secret.yaml
+.idea/
+.vscode/

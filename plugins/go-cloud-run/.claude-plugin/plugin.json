@@ -1,0 +1,8 @@
+{
+  "name": "go-cloud-run",
+  "version": "0.1.0",
+  "description": "Scaffold Go services on Cloud Run from go-cloud-run-template (cookiecutter).",
+  "author": {
+    "name": "llorenzinho"
+  }
+}

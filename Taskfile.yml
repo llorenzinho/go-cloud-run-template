@@ -1,0 +1,69 @@
+version: "3"
+
+# Template tests: render the template without touching GitHub/GCP and run the
+# generated project's checks. Output goes to .bake/ (git-ignored).
+#
+# A variant is PG EX REDIS (y/n each): use_postgres, include_examples, use_redis.
+
+vars:
+  OUT: "{{.ROOT_DIR}}/.bake"
+  # Dummy account values: the template has no defaults for them.
+  OPTS: >-
+    create_github_repo=n setup_wif=n github_owner=example gcp_project=example-project
+    ar_repository=containers wif_pool=github wif_service_account=ci@example-project.iam.gserviceaccount.com
+  # Variants checked by verify: full, postgres without examples, bare, redis only, everything.
+  VARIANTS: yyn ynn nnn nny yyy
+
+tasks:
+  default:
+    cmds: [task --list]
+
+  bake:
+    desc: "Render one variant into .bake/demo-<PG><EX><REDIS>: task bake V=yyn"
+    vars:
+      V: '{{.V | default "yyn"}}'
+      PG: '{{index (splitList "" .V) 0}}'
+      EX: '{{index (splitList "" .V) 1}}'
+      REDIS: '{{index (splitList "" .V) 2}}'
+    cmds:
+      - rm -rf {{.OUT}}/demo-{{.V}}
+      - cookiecutter --no-input -o {{.OUT}} . project_name=demo-{{.V}} use_postgres={{.PG}} include_examples={{.EX}} use_redis={{.REDIS}} {{.OPTS}}
+
+  verify:one:
+    desc: "Bake one variant and run build, lint, sqlc check, unit tests, docker build, deploy check: task verify:one V=ynn"
+    vars:
+      V: '{{.V | default "yyn"}}'
+      DIR: "{{.OUT}}/demo-{{.V}}"
+    cmds:
+      - task: bake
+        vars: { V: "{{.V}}" }
+      - cd {{.DIR}} && task build lint test docker:build
+      - cd {{.DIR}} && if test -f sqlc.yaml; then task sqlc:check; fi
+      - cd {{.DIR}} && DEPLOY_SECRET_DB_PASSWORD=x DEPLOY_SECRET_REDIS_URL=redis://h:6379/0 task deploy:check STACK=dev
+
+  verify:
+    desc: Bake every variant in VARIANTS and verify it
+    cmds:
+      - for: { var: VARIANTS, split: " " }
+        task: verify:one
+        vars: { V: "{{.ITEM}}" }
+
+  verify:integration:
+    desc: Integration tests (testcontainers) of the baked variants
+    cmds:
+      - for: { var: VARIANTS, split: " " }
+        cmd: cd {{.OUT}}/demo-{{.ITEM}} && task test:integration
+
+  skill:install:
+    desc: "Install the scaffold skill for Claude Code and opencode (symlinks to this checkout)"
+    vars:
+      SKILL: "{{.ROOT_DIR}}/plugins/go-cloud-run/skills/go-cloud-run-scaffold"
+    cmds:
+      - mkdir -p ~/.claude/skills ~/.config/opencode/skills
+      - ln -sfn {{.SKILL}} ~/.claude/skills/go-cloud-run-scaffold
+      - ln -sfn {{.SKILL}} ~/.config/opencode/skills/go-cloud-run-scaffold
+      - 'echo "Installed. Set GO_CLOUD_RUN_TEMPLATE={{.ROOT_DIR}} to scaffold from this checkout."'
+
+  clean:
+    cmds:
+      - rm -rf {{.OUT}}

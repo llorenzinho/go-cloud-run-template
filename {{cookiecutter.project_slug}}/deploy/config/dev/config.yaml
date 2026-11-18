@@ -1,0 +1,22 @@
+stack: dev
+
+project: {{ cookiecutter.gcp_project }}
+region: {{ cookiecutter.gcp_region }}
+
+service:
+  name: {{ cookiecutter.project_slug }}-dev
+  max_instances: 2
+  deletion_protection: false
+
+app:
+  log_level: debug
+{%- if cookiecutter.use_postgres == 'y' %}
+  db:
+    host: 10.0.0.3 # CHANGE ME
+    user: {{ cookiecutter.project_slug }}
+    name: {{ cookiecutter.project_slug }}_dev
+{%- endif %}
+
+access:
+  callers:
+    - gateway@{{ cookiecutter.gcp_project }}.iam.gserviceaccount.com # CHANGE ME

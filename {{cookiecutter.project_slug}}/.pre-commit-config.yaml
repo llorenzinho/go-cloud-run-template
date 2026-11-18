@@ -1,0 +1,64 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, feat, fix, perf, refactor, docs, test, build, ci, chore, revert, style]
+
+  # Tools come from mise (mise.toml): `mise exec` runs the pinned versions even when
+  # mise is not activated in the shell running git.
+  - repo: local
+    hooks:
+      - id: golangci-lint-fmt
+        name: golangci-lint fmt
+        entry: mise exec -- golangci-lint fmt
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: golangci-lint
+        name: golangci-lint
+        entry: mise exec -- golangci-lint run --fix=false
+        language: system
+        types: [go]
+        pass_filenames: false
+{%- if cookiecutter.use_postgres == 'y' %}
+      - id: sqlc-diff
+        name: sqlc generated code up to date
+        entry: mise exec -- sqlc diff
+        language: system
+        files: ^(db/|sqlc\.yaml$)
+        pass_filenames: false
+{%- endif %}
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: mise exec -- go mod tidy -diff
+        language: system
+        files: (\.go|go\.mod|go\.sum)$
+        pass_filenames: false
+      # deploy/ is a separate Go module.
+      - id: deploy-golangci-lint
+        name: golangci-lint (deploy module)
+        entry: bash -c 'cd deploy && mise exec -- golangci-lint fmt --config ../.golangci.yml && mise exec -- golangci-lint run --config ../.golangci.yml ./...'
+        language: system
+        files: ^deploy/
+        pass_filenames: false
+      - id: deploy-go-mod-tidy
+        name: go mod tidy (deploy module)
+        entry: bash -c 'cd deploy && mise exec -- go mod tidy -diff'
+        language: system
+        files: ^deploy/.*(\.go|go\.mod|go\.sum)$
+        pass_filenames: false

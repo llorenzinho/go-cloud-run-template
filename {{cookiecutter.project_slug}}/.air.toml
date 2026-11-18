@@ -1,0 +1,23 @@
+# Hot reload for `task dev` (docker compose service "app").
+# Each rebuild restarts delve: the app keeps running (--continue) and a debugger
+# can attach at any time on :2345.
+root = "."
+tmp_dir = "/tmp/air" # outside the bind mount: no root-owned files in the repo
+
+[build]
+cmd = "go build -gcflags='all=-N -l' -o /tmp/air/{{ cookiecutter.project_slug }} ./cmd/{{ cookiecutter.project_slug }}"
+entrypoint = ["/go/bin/dlv", "exec", "/tmp/air/{{ cookiecutter.project_slug }}", "--headless", "--listen=:2345", "--api-version=2", "--accept-multiclient", "--continue"]
+include_ext = ["go", "sql", "yaml"]
+include_dir = ["cmd", "internal", "db", "configs"]
+exclude_regex = ["_test\\.go$"]
+delay = 500
+kill_delay = "2s"
+send_interrupt = true
+stop_on_error = true
+poll = false
+
+[log]
+time = false
+
+[misc]
+clean_on_exit = true
