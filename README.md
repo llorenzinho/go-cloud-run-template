@@ -76,7 +76,7 @@ export GO_CLOUD_RUN_TEMPLATE=$PWD    # scaffold from the checkout instead of Git
 | `base_path` | `/<slug>` | API under `<base_path>/v1` |
 | `use_postgres` | `y` | pgx pool + sqlc + goose, compose service, `db:*`/`migrate:*`/`sqlc` tasks, deploy secret |
 | `db_schema` | slug with `_` | Postgres schema of the service (fixed: written in the migrations) |
-| `include_examples` | `y` | deletable `items` CRUD (migration, queries, seed, repository with `InTx`, service, handler, tests); only with Postgres |
+| `include_examples` | `y` | deletable `items` CRUD (migration, queries, seed, service with `InTx`, handler, tests); only with Postgres |
 | `use_redis` | `n` | |
 | `use_auth` | `n` | Bearer JWT on `<base_path>/v*` (except `/v*/public`): `internal/auth`, gin middleware, `/v1/me`, `cmd/devtoken`, deploy `app.auth` + `access.public` |
 | `gcp_project`, `ar_repository` | required | project of Artifact Registry and Cloud Run, Docker repository |

@@ -56,8 +56,6 @@ EXAMPLE_PATHS = [
     "db/migrations/00002_create_items.sql",
     "db/queries/items.sql",
     "db/seed/00001_items.sql",
-    "internal/domain/item.go",
-    "internal/repository",
     "internal/service",
     "internal/http/handler/items.go",
     "internal/http/items_test.go",

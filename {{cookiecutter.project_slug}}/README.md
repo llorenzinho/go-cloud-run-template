@@ -266,10 +266,10 @@ The `items` example only shows the layers; delete it when you add your own code:
 
 ```sh
 rm db/migrations/00002_create_items.sql db/queries/items.sql db/seed/00001_items.sql \
-   internal/domain/item.go internal/http/handler/items.go internal/http/items_test.go \
+   internal/http/handler/items.go internal/http/items_test.go \
    test/integration/items_test.go api/http/items.http{% if cookiecutter.use_auth == 'y' %} \
    internal/http/handler/public.go{% endif %}
-rm -r internal/repository internal/service
+rm -r internal/service
 ```
 
 Then remove the blocks between `// example:begin` and `// example:end` in

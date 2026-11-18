@@ -25,10 +25,9 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
 | `cmd/devtoken` | Dev key pair + token signing (`task auth:keygen`, `task auth:token`) |
 {%- endif %}
 | `internal/http` | Router (`NewRouter`), server (`NewServer(h, opts...)`), `middleware/`, `handler/` |
-| `internal/domain` | Business types and sentinel errors (`ErrNotFound`, `ErrConflict`, `ErrInvalidInput`) |
+| `internal/domain` | Sentinel errors (`ErrNotFound`, `ErrConflict`, `ErrInvalidInput`) |
 {%- if cookiecutter.__examples == 'y' %}
-| `internal/service` | Business logic, depends on repository interfaces (example `items`) |
-| `internal/repository` | Interfaces + Postgres implementation over sqlc (example `items`) |
+| `internal/service` | Business logic over the sqlc queries, transactions with `InTx`, pg errors → `domain.Err*` (example `items`) |
 {%- endif %}
 {%- if cookiecutter.use_postgres == 'y' %}
 | `internal/postgres` | Pool (`New`, options), `DBTX()` with query timeout, `InTx`, `Migrate`, readiness `Check` |
@@ -56,7 +55,7 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
   and `validate` tags, add the key with a dev value and a comment to
   `configs/config.yaml`. If production needs a value, set it in
   `deploy/internal/infra.ServerEnv` and list it in `config.ManagedEnv` (deploy module).
-- **Errors**: repositories return `domain.Err*`; handlers call `c.Error(err)` and
+- **Errors**: services return `domain.Err*`; handlers call `c.Error(err)` and
   return; `middleware.Errors` maps them to the JSON envelope
   `{"error":{"code","message"},"request_id"}`. Wrap with `%w`, never log and return.
 - **Validation**: request structs use `validate` tags (go-playground) through
@@ -93,8 +92,8 @@ run them as `mise exec -- <tool>` (Taskfile tasks already do).
    (`-- +goose Up` / `-- +goose Down`).
 2. Add queries to `db/queries/<table>.sql` (`-- name: X :one|:many|:exec|:execrows`,
    `sqlc.narg` for optional params).
-3. `task sqlc` → call the generated methods from a repository (`internal/repository`)
-   behind an interface; map rows to `internal/domain` types.
+3. `task sqlc` → call the generated methods from a service (`internal/service`);
+   return the sqlc row types, map pg errors to `domain.Err*`.
 4. `task migrate:up` (local) and `task db:seed` if you add seed files.
    Other environments: `task migrate:up ENV=<name>` with `.env.<name>`.
 {%- endif %}

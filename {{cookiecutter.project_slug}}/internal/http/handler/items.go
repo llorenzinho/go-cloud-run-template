@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"{{ cookiecutter.module_path }}/internal/db/sqlc"
 	"{{ cookiecutter.module_path }}/internal/domain"
 {%- if cookiecutter.use_auth == 'y' %}
 	"{{ cookiecutter.module_path }}/internal/http/middleware"
@@ -79,7 +80,7 @@ type ListItemsQuery struct {
 	Offset int32 `form:"offset,default=0" json:"offset" validate:"gte=0"`
 }
 
-func toResponse(i *domain.Item) ItemResponse {
+func toResponse(i sqlc.Item) ItemResponse {
 	return ItemResponse{
 		ID:          i.ID.String(),
 		Name:        i.Name,
@@ -107,7 +108,7 @@ func (h *Items) list(c *gin.Context) {
 	if !bind(c, c.ShouldBindQuery(&q)) {
 		return
 	}
-	items, err := h.svc.List(c, domain.Page{Limit: q.Limit, Offset: q.Offset})
+	items, err := h.svc.List(c, q.Limit, q.Offset)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -141,7 +142,7 @@ func (h *Items) update(c *gin.Context) {
 	if !bind(c, c.ShouldBindJSON(&req)) {
 		return
 	}
-	item, err := h.svc.Update(c, id, domain.ItemPatch{Name: req.Name, Description: req.Description})
+	item, err := h.svc.Update(c, id, req.Name, req.Description)
 	if err != nil {
 		_ = c.Error(err)
 		return

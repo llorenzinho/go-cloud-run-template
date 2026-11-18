@@ -14,12 +14,11 @@ import (
 
 	ihttp "{{ cookiecutter.module_path }}/internal/http"
 	"{{ cookiecutter.module_path }}/internal/http/handler"
-	"{{ cookiecutter.module_path }}/internal/repository"
 	"{{ cookiecutter.module_path }}/internal/service"
 )
 
 func withItems(d *ihttp.Deps, st stack) {
-	d.Items = handler.NewItems(service.NewItemService(repository.NewPostgres(st.DB), st.Log))
+	d.Items = handler.NewItems(service.NewItemService(st.DB, st.Log))
 }
 
 func call(t *testing.T, method, url string, body any) (int, map[string]any) {

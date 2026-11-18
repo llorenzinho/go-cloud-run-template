@@ -8,7 +8,7 @@ sql:
         package: sqlc
         out: internal/db/sqlc
         sql_package: pgx/v5
-        emit_interface: true
+        emit_interface: false
         # Every method takes the DBTX: pass db.DBTX() or the tx of db.InTx.
         emit_methods_with_db_argument: true
         emit_empty_slices: true

@@ -29,7 +29,6 @@ import (
 	"{{ cookiecutter.module_path }}/internal/redis"
 {%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
-	"{{ cookiecutter.module_path }}/internal/repository"
 	"{{ cookiecutter.module_path }}/internal/service"
 {%- endif %}
 )
@@ -63,7 +62,6 @@ var Infra = do.Package(
 var App = do.Package(
 {%- if cookiecutter.__examples == 'y' %}
 	// example:begin items
-	do.Lazy(provideItemRepository),
 	do.Lazy(provideItemService),
 	// example:end
 {%- endif %}
@@ -215,20 +213,12 @@ func provideHealth(i do.Injector) (*health.Registry, error) {
 {%- if cookiecutter.__examples == 'y' %}
 
 // example:begin items
-func provideItemRepository(i do.Injector) (repository.ItemRepository, error) {
+func provideItemService(i do.Injector) (*service.ItemService, error) {
 	db, err := do.Invoke[*postgres.DB](i)
 	if err != nil {
 		return nil, err
 	}
-	return repository.NewPostgres(db), nil
-}
-
-func provideItemService(i do.Injector) (*service.ItemService, error) {
-	repo, err := do.Invoke[repository.ItemRepository](i)
-	if err != nil {
-		return nil, err
-	}
-	return service.NewItemService(repo, do.MustInvoke[*slog.Logger](i)), nil
+	return service.NewItemService(db, do.MustInvoke[*slog.Logger](i)), nil
 }
 
 // example:end

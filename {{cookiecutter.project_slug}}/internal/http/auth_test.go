@@ -64,13 +64,14 @@ func TestItemWritesRequireAdmin(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.Equal(t, "forbidden", body["error"].(map[string]any)["code"])
 
-	code, _, _ = sendAs(t, r, viewer, http.MethodGet, "/api/v1/items", "")
-	assert.Equal(t, http.StatusOK, code, "reads need a token only")
+	// 400: past authentication and role checks, stopped by validation (no database here).
+	code, _, _ = sendAs(t, r, viewer, http.MethodGet, "/api/v1/items/nope", "")
+	assert.Equal(t, http.StatusBadRequest, code, "reads need a token only")
 
 	code, _, _ = sendAs(t, r, "", http.MethodGet, "/api/v1/items", "")
 	assert.Equal(t, http.StatusUnauthorized, code)
 
-	code, _, _ = sendAs(t, r, adminToken, http.MethodPost, "/api/v1/items", `{"name":"x"}`)
-	assert.Equal(t, http.StatusCreated, code)
+	code, _, _ = sendAs(t, r, adminToken, http.MethodPost, "/api/v1/items", `{"name":" "}`)
+	assert.Equal(t, http.StatusBadRequest, code)
 }
 {%- endif %}

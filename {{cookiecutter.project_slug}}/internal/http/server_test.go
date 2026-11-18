@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-{%- if cookiecutter.__examples == 'y' %}
-	"uuid"
-{%- endif %}
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -21,9 +18,6 @@ import (
 {%- if cookiecutter.use_auth == 'y' %}
 	"{{ cookiecutter.module_path }}/internal/auth"
 	"{{ cookiecutter.module_path }}/internal/auth/authtest"
-{%- endif %}
-{%- if cookiecutter.__examples == 'y' %}
-	"{{ cookiecutter.module_path }}/internal/domain"
 {%- endif %}
 	"{{ cookiecutter.module_path }}/internal/health"
 	ihttp "{{ cookiecutter.module_path }}/internal/http"
@@ -86,7 +80,7 @@ func newRouter(t *testing.T, checks ...health.Checker) http.Handler {
 		Auth:     a,
 {%- endif %}
 {%- if cookiecutter.__examples == 'y' %}
-		Items:    handler.NewItems(service.NewItemService(&memRepo{items: map[uuid.UUID]*domain.Item{}}, log)),
+		Items:    handler.NewItems(service.NewItemService(nil, log)), // no database: only routes that fail before it
 {%- endif %}
 	})
 	require.NoError(t, err)
